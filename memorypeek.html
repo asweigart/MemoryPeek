@@ -128,7 +128,6 @@ header .stat {
 header .stat[hidden] { display: none; }
 header .stat strong { color: var(--fg); margin-left: 4px; font-weight: 600; }
 .lang-pick { display: flex; align-items: center; gap: 6px; }
-.lang-pick .globe { font-size: 16px; line-height: 1; }
 .lang-pick select {
   font-size: 13px;
   padding: 4px 6px;
@@ -494,10 +493,6 @@ footer a { color: var(--accent); text-decoration: underline; }
   <button class="btn" id="btnGallery" type="button" hidden>View Gallery</button>
   <button class="btn" id="btnNewGame" type="button" hidden>New Game</button>
   <div class="lang-pick">
-    <!-- Globe emoji is purely decorative; the select's aria-label keeps screen
-         readers informed. Using a span (not a <label>) avoids the awkwardness
-         of an aria-hidden label hiding the emoji from assistive tech. -->
-    <span class="globe" aria-hidden="true">🌐</span>
     <select id="langSelect" aria-label="Interface language"></select>
   </div>
 </header>
