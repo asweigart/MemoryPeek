@@ -1,0 +1,3453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Memory Peek</title>
+<meta name="description" content="Build a custom memory card game with your own images. Single-file, offline, ownable.">
+<meta name="author" content="Al Sweigart">
+<meta property="og:title" content="Memory Peek">
+<meta property="og:description" content="Build a custom memory card game with your own images. Single-file, offline, ownable.">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1115">
+<!-- SVG favicon embedded as a data URI so the file remains a single, self-contained artifact. -->
+<link rel="icon" type="image/svg+xml" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="%232f5cd9"/><rect x="6" y="6" width="9" height="9" rx="2" fill="white"/><rect x="17" y="6" width="9" height="9" rx="2" fill="white" opacity="0.55"/><rect x="6" y="17" width="9" height="9" rx="2" fill="white" opacity="0.55"/><rect x="17" y="17" width="9" height="9" rx="2" fill="white"/></svg>'>
+
+<style>
+/* -----------------------------------------------------------------------------
+   Design tokens. Light is the default; the dark-mode block overrides selected
+   variables only. `color-scheme: light dark` makes native UI (scrollbars, form
+   controls) follow the OS preference too, which we want since we don't restyle
+   every control from scratch.
+   --------------------------------------------------------------------------- */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #14181f;
+  --muted: #586273;
+  --panel: #f4f5f8;
+  --panel-2: #eaecf1;
+  --border: #d4d8e0;
+  --accent: #2f5cd9;
+  --accent-fg: #ffffff;
+  --warn: #9c4a0e;
+  --warn-bg: #fff4e0;
+  --warn-border: #f0b977;
+  --danger: #b53023;
+  --focus: #2f5cd9;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 14px rgba(0,0,0,.06);
+  --radius: 10px;
+  --radius-sm: 6px;
+  --card-back-bg: #2f5cd9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --fg: #e8ecf3;
+    --muted: #9ba6b8;
+    --panel: #181c25;
+    --panel-2: #1f2532;
+    --border: #2a3142;
+    --accent: #7aa2ff;
+    --accent-fg: #0f1115;
+    --warn: #f0a35a;
+    --warn-bg: #2c1f10;
+    --warn-border: #5a3e1c;
+    --danger: #f06a5a;
+    --focus: #7aa2ff;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.45);
+    --card-back-bg: #2f5cd9;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  /* Reserve space for the homescreen safe areas on iOS. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* High-contrast focus ring across all interactive elements. */
+:where(button, select, input, textarea, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Skip link for keyboard users; visible only when focused.
+   We hide it by translating up off-screen instead of using `left: -9999px`,
+   which in RTL layouts gets counted as horizontal overflow and inflates
+   <html>'s scrollWidth to ~10,000px (causing a runaway horizontal scrollbar). */
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translateY(-200%);
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 8px 12px;
+  z-index: 1000;
+  border-radius: 0 0 var(--radius-sm) 0;
+}
+.skip-link:focus { transform: translateY(0); }
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+header h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+header .spacer { flex: 1; }
+header .btn { padding: 5px 10px; font-size: 13px; }
+.match-text { color: var(--muted); font-size: 13px; }
+.match-text[hidden] { display: none; }
+/* Inline stats live in the header next to the game-mode buttons. */
+header .stat {
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+header .stat[hidden] { display: none; }
+header .stat strong { color: var(--fg); margin-left: 4px; font-weight: 600; }
+.lang-pick { display: flex; align-items: center; gap: 6px; }
+.lang-pick .globe { font-size: 16px; line-height: 1; }
+.lang-pick select {
+  font-size: 13px;
+  padding: 4px 6px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+main {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 10px 14px;
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+  padding: 8px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+footer a { color: var(--accent); text-decoration: underline; }
+
+/* --- Generic editor section styling ------------------------------------- */
+.section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 0 0 8px;
+  box-shadow: var(--shadow);
+}
+.section h2 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 13px; color: var(--muted); }
+.field input[type=number], .field input[type=text], .field select {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: var(--radius-sm);
+  min-width: 80px;
+}
+.field input[type=number] { width: 90px; }
+.field input[type=text] { width: 100%; min-width: 0; }
+
+/* Computed-totals hint that sits alongside the Board fields. Aligned to the
+   bottom of the row so it lines up visually with the inputs, not the field
+   labels above them. */
+.field-hint {
+  color: var(--muted);
+  font-size: 12px;
+  align-self: flex-end;
+  padding-bottom: 7px;
+  white-space: nowrap;
+}
+.field-hint:empty { display: none; }
+
+.btn {
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+}
+.btn:hover { background: var(--panel-2); }
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+.btn.primary:hover { filter: brightness(1.05); }
+.btn.danger { color: var(--danger); border-color: var(--danger); background: transparent; }
+.btn.danger:hover { background: var(--warn-bg); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.warn {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+.warn[hidden] { display: none; }
+
+.hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* --- Image dropzone & thumbs ------------------------------------------- */
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  text-align: center;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.dropzone.drag { background: var(--panel-2); border-color: var(--accent); color: var(--fg); }
+.dropzone input { display: none; }
+
+.thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+.thumb {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+/* Duplicate uploads — same data URI seen more than once. Highlight matches
+   the warn palette so the link to the "N duplicate(s) detected" banner is
+   obvious. Outline (not border) keeps the thumb's intrinsic dimensions. */
+.thumb.dup {
+  outline: 3px solid var(--warn);
+  outline-offset: -1px;
+  box-shadow: 0 0 0 1px var(--warn-bg);
+}
+.thumb img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.thumb .x {
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.6);
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 22px;
+  text-align: center;
+  padding: 0;
+}
+.thumb .x:hover { background: rgba(0,0,0,0.8); }
+
+/* --- Backside picker ---------------------------------------------------- */
+.backsides {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 6px;
+}
+.backside-opt {
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 2px solid transparent;
+  cursor: pointer;
+  background: var(--panel-2);
+  position: relative;
+}
+.backside-opt.selected { border-color: var(--accent); }
+.backside-opt img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.backside-opt .label {
+  position: absolute;
+  inset: auto 0 0 0;
+  background: rgba(0,0,0,0.55);
+  color: white;
+  font-size: 11px;
+  padding: 2px 4px;
+  text-align: center;
+}
+
+/* --- Checkbox rows for HUD toggles ------------------------------------- */
+.toggles { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.toggle { display: flex; align-items: center; gap: 6px; }
+/* Inline game-name field sits at the right end of the toggles row and takes
+   the remaining space; on narrow screens it wraps to its own line. */
+.toggles input[type=text] {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: var(--radius-sm);
+  flex: 1;
+  min-width: 180px;
+}
+
+/* --- Game view ---------------------------------------------------------- */
+#gameView { display: none; }
+#gameView.active { display: block; }
+
+/* Board fits the available viewport: width is capped by --avail-h scaled
+   to the grid's aspect ratio. --cols and --rows are set by JS so a 2x4
+   board doesn't render as a stretched square. The header carries all the
+   chrome now, so we only have to budget header + footer + margins. */
+#boardWrap {
+  --avail-h: calc(100dvh - 150px);
+  width: min(100%, calc(var(--avail-h) * var(--cols, 4) / var(--rows, 4)));
+  margin: 0 auto;
+}
+#board {
+  display: grid;
+  gap: clamp(3px, 0.8vmin, 8px);
+  aspect-ratio: var(--cols, 4) / var(--rows, 4);
+  /* grid-template-columns set inline by JS */
+}
+
+.card {
+  /* Each grid cell is a clickable card; keep a square aspect ratio. */
+  aspect-ratio: 1;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.card[disabled] { cursor: default; }
+.card-inner {
+  /* Block so width/height percentages apply — element is a <span> in markup. */
+  display: block;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.card.matched .card-inner { opacity: 0.6; }
+
+.card-side {
+  display: block;
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--panel-2);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Back is shown by default. Front fades in over it when revealed. */
+.card-side.front {
+  background: var(--bg);
+  opacity: 0;
+  transform: scale(0.88);
+  pointer-events: none;
+}
+.card.flipped .card-side.front,
+.card.matched .card-side.front {
+  opacity: 1;
+  transform: scale(1);
+}
+.card.flipped .card-side.back,
+.card.matched .card-side.back { opacity: 0; }
+.card-side img { display: block; max-width: 100%; max-height: 100%; }
+
+/* The four image-fit modes, controlled by a class on #board: */
+.fit-contain  .card-side.front img { width: 100%; height: 100%; object-fit: contain; }
+.fit-cover    .card-side.front img { width: 100%; height: 100%; object-fit: cover; }
+.fit-stretch  .card-side.front img { width: 100%; height: 100%; object-fit: fill; }
+.fit-original .card-side.front img { width: auto;  height: auto;  object-fit: none; max-width: 100%; max-height: 100%; }
+
+/* --- Gallery modal ------------------------------------------------------ */
+#gallery {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0,0,0,0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+}
+#gallery[hidden] { display: none; }
+.gallery-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.gallery-stage img {
+  max-width: 100%;
+  max-height: 80dvh;
+  border-radius: var(--radius);
+  background: #fff;
+  object-fit: contain;
+}
+#galleryCount { color: rgba(255,255,255,0.85); font-size: 14px; font-variant-numeric: tabular-nums; }
+.gallery-nav {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  font-size: 28px;
+  line-height: 1;
+  color: white;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.gallery-nav:hover { background: rgba(255,255,255,0.2); }
+.gallery-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 38px;
+  height: 38px;
+  font-size: 22px;
+  line-height: 1;
+  color: white;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+/* Small-screen tweaks. Keep things one column. */
+@media (max-width: 520px) {
+  main { padding: 8px; }
+  .section { padding: 8px 10px; }
+  .gallery-nav { width: 38px; height: 38px; font-size: 22px; }
+}
+</style>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<header role="banner">
+  <h1 id="appTitle">Memory Peek</h1>
+  <span id="matchText" class="match-text" aria-live="polite"></span>
+  <span class="spacer" aria-hidden="true"></span>
+  <!-- Stats are individually toggled by the editor's HUD checkboxes.
+       The label text is wrapped in its own span so applyI18n() can replace
+       just the label without clobbering the live-updating <strong> value. -->
+  <span class="stat" id="statMoves"   hidden><span data-i18n="moves">Moves</span><strong id="movesVal">0</strong></span>
+  <span class="stat" id="statTimer"   hidden><span data-i18n="time">Time</span><strong id="timerVal">0:00</strong></span>
+  <span class="stat" id="statMatches" hidden><span data-i18n="matches">Matches</span><strong id="matchesVal">0 / 0</strong></span>
+  <!-- Game-mode controls. Shown only while a game (or test-play) is active. -->
+  <button class="btn" id="btnEditCards" type="button" hidden>Edit Cards</button>
+  <button class="btn" id="btnGallery" type="button" hidden>View Gallery</button>
+  <button class="btn" id="btnNewGame" type="button" hidden>New Game</button>
+  <div class="lang-pick">
+    <!-- Globe emoji is purely decorative; the select's aria-label keeps screen
+         readers informed. Using a span (not a <label>) avoids the awkwardness
+         of an aria-hidden label hiding the emoji from assistive tech. -->
+    <span class="globe" aria-hidden="true">🌐</span>
+    <select id="langSelect" aria-label="Interface language"></select>
+  </div>
+</header>
+
+<main id="main" role="main">
+
+  <!-- ===================== EDITOR VIEW ===================== -->
+  <section id="editorView" aria-labelledby="appTitle">
+
+    <div class="section" aria-labelledby="sec-images">
+      <h2 id="sec-images">Card images</h2>
+      <p id="appDescription" class="hint" data-i18n="appDescription">Memory Peek lets you create memory games using your own custom images.</p>
+      <label class="dropzone" id="dropzone">
+        <input id="fileInput" type="file" accept="image/*" multiple aria-label="Add card images">
+        <span id="dropzoneText">Click or drop images here. PNG, JPG, GIF, WebP, SVG.</span>
+      </label>
+      <div id="thumbGrid" class="thumb-grid" role="list" aria-label="Uploaded images"></div>
+      <div id="imageWarn" class="warn" hidden style="margin-top:8px"></div>
+      <div style="margin-top:8px">
+        <button class="btn danger" id="btnClearCards" type="button" data-i18n="clearCards">Clear Cards</button>
+      </div>
+    </div>
+
+    <div class="section" aria-labelledby="sec-board">
+      <h2 id="sec-board">Board</h2>
+      <div class="row">
+        <div class="field">
+          <label for="cols" data-i18n="cols">Columns</label>
+          <input type="number" id="cols" min="1" max="20" value="4">
+        </div>
+        <div class="field">
+          <label for="rows" data-i18n="rows">Rows</label>
+          <input type="number" id="rows" min="1" max="20" value="4">
+        </div>
+        <span id="gridTotalHint" class="field-hint" aria-live="polite"></span>
+        <div class="field">
+          <label for="copies" data-i18n="copies">Copies per card</label>
+          <input type="number" id="copies" min="2" max="12" value="2">
+        </div>
+        <span id="uniqueTotalHint" class="field-hint" aria-live="polite"></span>
+        <div class="field">
+          <label for="fit" data-i18n="fit">Image fit</label>
+          <select id="fit">
+            <option value="contain"  data-i18n="fitContain">Fit (preserve aspect)</option>
+            <option value="cover"    data-i18n="fitCover">Cover (crop to fill)</option>
+            <option value="stretch"  data-i18n="fitStretch">Stretch (no aspect)</option>
+            <option value="original" data-i18n="fitOriginal">Original size</option>
+          </select>
+        </div>
+      </div>
+      <div id="boardWarn" class="warn" hidden></div>
+    </div>
+
+    <div class="section" aria-labelledby="sec-back">
+      <h2 id="sec-back">Card backside</h2>
+      <div id="backsides" class="backsides" role="radiogroup" aria-label="Card backside designs"></div>
+      <div style="margin-top:10px;">
+        <label class="btn" for="customBackInput" data-i18n="uploadCustomBack">Upload custom backside</label>
+        <input id="customBackInput" type="file" accept="image/*" style="display:none">
+        <button class="btn" id="clearCustomBack" type="button" hidden data-i18n="removeCustomBack">Remove custom backside</button>
+      </div>
+    </div>
+
+    <div class="section" aria-labelledby="sec-hud">
+      <h2 id="sec-hud">Play HUD (hidden by default)</h2>
+      <div class="toggles">
+        <label class="toggle"><input type="checkbox" id="hudMoves"> <span data-i18n="hudMoves">Show move counter</span></label>
+        <label class="toggle"><input type="checkbox" id="hudTimer"> <span data-i18n="hudTimer">Show elapsed timer</span></label>
+        <label class="toggle"><input type="checkbox" id="hudMatches"> <span data-i18n="hudMatches">Show matches found</span></label>
+        <!-- Game name lives on the same row as the toggles. No visible label —
+             the placeholder carries the description for sighted users; the
+             aria-label below keeps screen-reader users informed. -->
+        <input type="text" id="gameName" placeholder="Optional game name"
+               aria-label="Optional game name" autocomplete="off" maxlength="80">
+      </div>
+    </div>
+
+    <div class="section" aria-labelledby="sec-actions">
+      <h2 id="sec-actions">Actions</h2>
+      <p id="actionsHint" class="hint">Uploaded images are kept only while this tab is open. Download the game .html file to keep them permanently.</p>
+      <div class="row">
+        <button class="btn primary" id="btnTestPlay" type="button">Test Play</button>
+        <button class="btn primary" id="btnDownload" type="button">Download Game .html</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== GAME VIEW =====================
+       Game-mode chrome (Edit Cards / View Gallery / New Game / stats / match
+       label) lives in the page header now. This section only holds the board
+       so the visible game is as tall as the viewport allows. -->
+  <section id="gameView" aria-label="Game">
+    <div id="boardWrap">
+      <div id="board" role="grid" aria-label="Memory game board"></div>
+    </div>
+  </section>
+
+  <!-- ===================== GALLERY MODAL =====================
+       A fixed-position overlay that lets the player browse all card faces.
+       Activated from the game HUD and from keyboard (left/right/esc). -->
+  <div id="gallery" hidden role="dialog" aria-modal="true" aria-label="Card gallery">
+    <button class="gallery-close" id="galleryClose" type="button" aria-label="Close gallery">×</button>
+    <button class="gallery-nav prev" id="galleryPrev" type="button" aria-label="Previous image">‹</button>
+    <div class="gallery-stage">
+      <img id="galleryImg" alt="">
+      <div id="galleryCount" aria-live="polite"></div>
+    </div>
+    <button class="gallery-nav next" id="galleryNext" type="button" aria-label="Next image">›</button>
+  </div>
+
+</main>
+
+<footer>
+  <p id="credit">
+    Generated and human-reviewed by <a href="https://inventwithpython.com">Al Sweigart</a>.
+    This app works offline and you own it forever. Just right-click and save the .html page.
+  </p>
+</footer>
+
+<noscript>
+  <p style="padding:18px;color:#b53023">This app needs JavaScript to run.</p>
+</noscript>
+
+<script>
+'use strict';
+
+/* =============================================================================
+   Memory Peek — single-file app.
+
+   The same file is both the editor and the game. When `window.APP_CONFIG`
+   exists at load time, the file boots straight into game mode with that
+   config; otherwise it boots into the editor. Downloading a standalone game
+   means taking a pristine snapshot of our own outerHTML and injecting an
+   APP_CONFIG <script> just before </head>.
+
+   State persistence: editor state is held in IndexedDB (so we can store image
+   data URIs comfortably past localStorage's ~5MB ceiling). Tiny things like
+   the selected language go into localStorage.
+   ===========================================================================*/
+
+/* ---------------------------------------------------------------------------
+   STEP 0: capture pristine HTML immediately, before we touch the DOM. This is
+   what we serialize when the user downloads a standalone game. Doing it first
+   means none of the editor's runtime state can leak into the downloaded file.
+   --------------------------------------------------------------------------- */
+const PRISTINE_HTML = '<!doctype html>\n' + document.documentElement.outerHTML;
+
+/* ---------------------------------------------------------------------------
+   Constants
+   --------------------------------------------------------------------------- */
+const LS_LANG = 'mgm.lang';
+const MISMATCH_FLIPBACK_MS = 1100; // how long unmatched cards stay revealed
+
+/* Full target language list. Each entry: BCP-47 code, flag emoji, native
+   label. Only entries whose code is in SUPPORTED_LANGS appear in the picker
+   today; the rest are reserved for when translations land. */
+const LANGUAGES = [
+  { code: 'en',      flag: '\u{1F1EC}\u{1F1E7}', label: 'English' },
+  { code: 'zh-Hans', flag: '\u{1F1E8}\u{1F1F3}', label: '简体中文' },
+  { code: 'es',      flag: '\u{1F1EA}\u{1F1F8}', label: 'Español' },
+  { code: 'ar',      flag: '\u{1F1F8}\u{1F1E6}', label: 'العربية' },
+  { code: 'id',      flag: '\u{1F1EE}\u{1F1E9}', label: 'Bahasa Indonesia' },
+  { code: 'pt',      flag: '\u{1F1F5}\u{1F1F9}', label: 'Português' },
+  { code: 'fr',      flag: '\u{1F1EB}\u{1F1F7}', label: 'Français' },
+  { code: 'ja',      flag: '\u{1F1EF}\u{1F1F5}', label: '日本語' },
+  { code: 'ru',      flag: '\u{1F1F7}\u{1F1FA}', label: 'Русский' },
+  { code: 'de',      flag: '\u{1F1E9}\u{1F1EA}', label: 'Deutsch' },
+  { code: 'hi',      flag: '\u{1F1EE}\u{1F1F3}', label: 'हिन्दी' },
+  { code: 'bn',      flag: '\u{1F1E7}\u{1F1E9}', label: 'বাংলা' },
+  { code: 'ur',      flag: '\u{1F1F5}\u{1F1F0}', label: 'اردو' },
+  { code: 'ko',      flag: '\u{1F1F0}\u{1F1F7}', label: '한국어' },
+  { code: 'vi',      flag: '\u{1F1FB}\u{1F1F3}', label: 'Tiếng Việt' },
+  { code: 'tr',      flag: '\u{1F1F9}\u{1F1F7}', label: 'Türkçe' },
+  { code: 'it',      flag: '\u{1F1EE}\u{1F1F9}', label: 'Italiano' },
+  { code: 'nl',      flag: '\u{1F1F3}\u{1F1F1}', label: 'Nederlands' },
+  { code: 'pl',      flag: '\u{1F1F5}\u{1F1F1}', label: 'Polski' },
+  { code: 'th',      flag: '\u{1F1F9}\u{1F1ED}', label: 'ไทย' },
+  { code: 'fa',      flag: '\u{1F1EE}\u{1F1F7}', label: 'فارسی' },
+  { code: 'uk',      flag: '\u{1F1FA}\u{1F1E6}', label: 'Українська' },
+  { code: 'cs',      flag: '\u{1F1E8}\u{1F1FF}', label: 'Čeština' },
+  { code: 'ms',      flag: '\u{1F1F2}\u{1F1FE}', label: 'Bahasa Melayu' },
+  { code: 'ro',      flag: '\u{1F1F7}\u{1F1F4}', label: 'Română' },
+  { code: 'el',      flag: '\u{1F1EC}\u{1F1F7}', label: 'Ελληνικά' },
+  { code: 'he',      flag: '\u{1F1EE}\u{1F1F1}', label: 'עברית' },
+  { code: 'sv',      flag: '\u{1F1F8}\u{1F1EA}', label: 'Svenska' },
+  { code: 'fil',     flag: '\u{1F1F5}\u{1F1ED}', label: 'Filipino' },
+  { code: 'ta',      flag: '\u{1F1EE}\u{1F1F3}', label: 'தமிழ்' },
+  { code: 'hu',      flag: '\u{1F1ED}\u{1F1FA}', label: 'Magyar' },
+  { code: 'da',      flag: '\u{1F1E9}\u{1F1F0}', label: 'Dansk' },
+  { code: 'fi',      flag: '\u{1F1EB}\u{1F1EE}', label: 'Suomi' },
+  { code: 'nb',      flag: '\u{1F1F3}\u{1F1F4}', label: 'Norsk bokmål' },
+  { code: 'sk',      flag: '\u{1F1F8}\u{1F1F0}', label: 'Slovenčina' },
+  { code: 'bg',      flag: '\u{1F1E7}\u{1F1EC}', label: 'Български' },
+  { code: 'sr',      flag: '\u{1F1F7}\u{1F1F8}', label: 'Српски' },
+  { code: 'hr',      flag: '\u{1F1ED}\u{1F1F7}', label: 'Hrvatski' },
+  { code: 'sl',      flag: '\u{1F1F8}\u{1F1EE}', label: 'Slovenščina' },
+  { code: 'ca',      flag: '\u{1F3F4}',          label: 'Català' },
+];
+const SUPPORTED_LANGS = new Set(LANGUAGES.map(l => l.code));
+
+/* English strings only for now. New locales drop into this map under their
+   BCP-47 code; missing keys fall back to English. */
+const I18N = {
+  en: {
+    appTitle: 'Memory Peek',
+    appDescription: 'Memory Peek lets you create memory games using your own custom images.',
+    secImages: 'Card images',
+    secBoard: 'Board',
+    secBack: 'Card backside',
+    secHud: 'Play HUD (hidden by default)',
+    secActions: 'Actions',
+    dropzone: 'Click or drop images here. PNG, JPG, GIF, WebP, SVG.',
+    cols: 'Columns',
+    rows: 'Rows',
+    copies: 'Copies per card',
+    fit: 'Image fit',
+    fitContain: 'Fit (preserve aspect)',
+    fitCover: 'Cover (crop to fill)',
+    fitStretch: 'Stretch (no aspect)',
+    fitOriginal: 'Original size',
+    uploadCustomBack: 'Upload custom backside',
+    removeCustomBack: 'Remove custom backside',
+    hudMoves: 'Show move counter',
+    hudTimer: 'Show elapsed timer',
+    hudMatches: 'Show matches found',
+    testPlay: 'Test Play',
+    download: 'Download Game .html',
+    clearCards:   'Clear Cards',
+    confirmClear: 'Remove all card images? This cannot be undone.',
+    gameNamePlaceholder: 'Optional game name',
+    actionsHint: 'Uploaded images are kept only while this tab is open. Download the game .html file to keep them permanently.',
+    warnDupImages: 'Note: {n} duplicate image{s} detected. This is allowed but may be confusing in play.',
+    moves: 'Moves',
+    time: 'Time',
+    matches: 'Matches',
+    newGame: 'New Game',
+    gallery: 'View Gallery',
+    editCards: 'Edit Cards',
+    matchEachCard: 'Match {n} of each card.',
+    /* Warnings — receive numeric args via {n}, {needed}, {have}. */
+    warnGridIndivisible: 'Board total ({n}) must divide evenly by copies-per-card ({copies}).',
+    warnNeedMoreImages: 'You need {needed} unique images for this board but have {have}.',
+    warnExtraImages: 'Only the first {needed} of your {have} images will be used.',
+    warnNoImages: 'Add at least one image to begin.',
+    cardAltFace: 'Card face',
+    cardAltBack: 'Card back',
+  },
+  'zh-Hans': {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek 让您使用自己的自定义图片创建记忆游戏。`,
+    secImages: `卡牌图片`,
+    secBoard: `牌面`,
+    secBack: `卡牌背面`,
+    secHud: `游戏信息显示（默认隐藏）`,
+    secActions: `操作`,
+    dropzone: `点击或将图片拖到此处。支持 PNG、JPG、GIF、WebP、SVG。`,
+    cols: `列数`,
+    rows: `行数`,
+    copies: `每张卡的副本数`,
+    fit: `图片适配`,
+    fitContain: `适应（保持比例）`,
+    fitCover: `覆盖（裁剪填充）`,
+    fitStretch: `拉伸（不保持比例）`,
+    fitOriginal: `原始尺寸`,
+    uploadCustomBack: `上传自定义背面`,
+    removeCustomBack: `移除自定义背面`,
+    hudMoves: `显示步数计数器`,
+    hudTimer: `显示计时器`,
+    hudMatches: `显示已配对数`,
+    testPlay: `试玩`,
+    download: `下载游戏 .html`,
+    clearCards:   `清空卡片`,
+    confirmClear: `删除所有卡片图片？此操作无法撤销。`,
+    gameNamePlaceholder: `可选的游戏名称`,
+    actionsHint: `上传的图片仅在此标签页打开期间保留。下载游戏 .html 文件以永久保存。`,
+    warnDupImages: `注意：检测到 {n} 张重复图片。这是允许的，但游戏时可能造成混淆。`,
+    moves: `步数`,
+    time: `时间`,
+    matches: `配对`,
+    newGame: `新游戏`,
+    gallery: `查看图册`,
+    editCards: `编辑卡牌`,
+    matchEachCard: `每张卡需匹配 {n} 张。`,
+    warnGridIndivisible: `牌面总数（{n}）必须能被每张卡的副本数（{copies}）整除。`,
+    warnNeedMoreImages: `此牌面需要 {needed} 张不同的图片，但你只有 {have} 张。`,
+    warnExtraImages: `仅使用你的 {have} 张图片中的前 {needed} 张。`,
+    warnNoImages: `请至少添加一张图片以开始。`,
+    cardAltFace: `卡牌正面`,
+    cardAltBack: `卡牌背面`,
+  },
+  es: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek te permite crear juegos de memoria con tus propias imágenes.`,
+    secImages: `Imágenes de las cartas`,
+    secBoard: `Tablero`,
+    secBack: `Reverso de las cartas`,
+    secHud: `Panel de juego (oculto por defecto)`,
+    secActions: `Acciones`,
+    dropzone: `Haz clic o suelta imágenes aquí. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Columnas`,
+    rows: `Filas`,
+    copies: `Copias por carta`,
+    fit: `Ajuste de imagen`,
+    fitContain: `Ajustar (conservar proporción)`,
+    fitCover: `Cubrir (recortar para llenar)`,
+    fitStretch: `Estirar (sin proporción)`,
+    fitOriginal: `Tamaño original`,
+    uploadCustomBack: `Subir reverso personalizado`,
+    removeCustomBack: `Quitar reverso personalizado`,
+    hudMoves: `Mostrar contador de movimientos`,
+    hudTimer: `Mostrar cronómetro`,
+    hudMatches: `Mostrar parejas encontradas`,
+    testPlay: `Probar`,
+    download: `Descargar juego .html`,
+    clearCards:   `Borrar cartas`,
+    confirmClear: `¿Eliminar todas las imágenes de cartas? Esto no se puede deshacer.`,
+    gameNamePlaceholder: `Nombre del juego (opcional)`,
+    actionsHint: `Las imágenes subidas solo se conservan mientras esta pestaña esté abierta. Descarga el archivo .html del juego para guardarlas de forma permanente.`,
+    warnDupImages: `Aviso: se detectaron {n} imágenes duplicadas. Está permitido, pero puede resultar confuso al jugar.`,
+    moves: `Movimientos`,
+    time: `Tiempo`,
+    matches: `Parejas`,
+    newGame: `Nueva partida`,
+    gallery: `Ver galería`,
+    editCards: `Editar cartas`,
+    matchEachCard: `Empareja {n} de cada carta.`,
+    warnGridIndivisible: `El total del tablero ({n}) debe ser divisible por las copias por carta ({copies}).`,
+    warnNeedMoreImages: `Necesitas {needed} imágenes únicas para este tablero, pero tienes {have}.`,
+    warnExtraImages: `Solo se usarán las primeras {needed} de tus {have} imágenes.`,
+    warnNoImages: `Añade al menos una imagen para empezar.`,
+    cardAltFace: `Anverso de la carta`,
+    cardAltBack: `Reverso de la carta`,
+  },
+  ar: {
+    appTitle: `Memory Peek`,
+    appDescription: `يتيح لك Memory Peek إنشاء ألعاب ذاكرة باستخدام صورك الخاصة.`,
+    secImages: `صور البطاقات`,
+    secBoard: `اللوحة`,
+    secBack: `ظهر البطاقة`,
+    secHud: `شريط معلومات اللعب (مخفي افتراضيًا)`,
+    secActions: `الإجراءات`,
+    dropzone: `انقر أو أسقط الصور هنا. PNG، JPG، GIF، WebP، SVG.`,
+    cols: `الأعمدة`,
+    rows: `الصفوف`,
+    copies: `النسخ لكل بطاقة`,
+    fit: `ملاءمة الصورة`,
+    fitContain: `ملاءمة (مع الحفاظ على النسبة)`,
+    fitCover: `تغطية (اقتصاص للملء)`,
+    fitStretch: `تمديد (بدون نسبة)`,
+    fitOriginal: `الحجم الأصلي`,
+    uploadCustomBack: `رفع ظهر مخصص`,
+    removeCustomBack: `إزالة الظهر المخصص`,
+    hudMoves: `إظهار عداد الحركات`,
+    hudTimer: `إظهار المؤقت`,
+    hudMatches: `إظهار التطابقات`,
+    testPlay: `تجربة اللعب`,
+    download: `تنزيل ملف اللعبة .html`,
+    clearCards:   `مسح البطاقات`,
+    confirmClear: `هل تريد إزالة جميع صور البطاقات؟ لا يمكن التراجع عن هذا الإجراء.`,
+    gameNamePlaceholder: `اسم اللعبة (اختياري)`,
+    actionsHint: `يتم الاحتفاظ بالصور المرفوعة فقط أثناء فتح هذه التبويبة. نزّل ملف اللعبة .html للاحتفاظ بها بشكل دائم.`,
+    warnDupImages: `ملاحظة: تم اكتشاف {n} من الصور المكررة. هذا مسموح به لكنه قد يكون مربكًا أثناء اللعب.`,
+    moves: `الحركات`,
+    time: `الوقت`,
+    matches: `التطابقات`,
+    newGame: `لعبة جديدة`,
+    gallery: `عرض المعرض`,
+    editCards: `تعديل البطاقات`,
+    matchEachCard: `طابق {n} من كل بطاقة.`,
+    warnGridIndivisible: `يجب أن يكون مجموع اللوحة ({n}) قابلاً للقسمة على عدد النسخ لكل بطاقة ({copies}).`,
+    warnNeedMoreImages: `تحتاج إلى {needed} صورة فريدة لهذه اللوحة لكن لديك {have}.`,
+    warnExtraImages: `سيتم استخدام أول {needed} فقط من صورك البالغ عددها {have}.`,
+    warnNoImages: `أضف صورة واحدة على الأقل للبدء.`,
+    cardAltFace: `وجه البطاقة`,
+    cardAltBack: `ظهر البطاقة`,
+  },
+  id: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek memungkinkan Anda membuat permainan memori menggunakan gambar Anda sendiri.`,
+    secImages: `Gambar kartu`,
+    secBoard: `Papan`,
+    secBack: `Belakang kartu`,
+    secHud: `HUD permainan (tersembunyi secara default)`,
+    secActions: `Tindakan`,
+    dropzone: `Klik atau letakkan gambar di sini. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Kolom`,
+    rows: `Baris`,
+    copies: `Salinan per kartu`,
+    fit: `Penyesuaian gambar`,
+    fitContain: `Pas (pertahankan rasio)`,
+    fitCover: `Tutup (potong untuk mengisi)`,
+    fitStretch: `Regangkan (tanpa rasio)`,
+    fitOriginal: `Ukuran asli`,
+    uploadCustomBack: `Unggah belakang khusus`,
+    removeCustomBack: `Hapus belakang khusus`,
+    hudMoves: `Tampilkan penghitung langkah`,
+    hudTimer: `Tampilkan pengatur waktu`,
+    hudMatches: `Tampilkan pasangan ditemukan`,
+    testPlay: `Coba mainkan`,
+    download: `Unduh game .html`,
+    clearCards:   `Hapus kartu`,
+    confirmClear: `Hapus semua gambar kartu? Tindakan ini tidak dapat dibatalkan.`,
+    gameNamePlaceholder: `Nama game (opsional)`,
+    actionsHint: `Gambar yang diunggah hanya disimpan selama tab ini terbuka. Unduh file game .html untuk menyimpannya secara permanen.`,
+    warnDupImages: `Catatan: terdeteksi {n} gambar duplikat. Diizinkan, tetapi dapat membingungkan saat bermain.`,
+    moves: `Langkah`,
+    time: `Waktu`,
+    matches: `Pasangan`,
+    newGame: `Game baru`,
+    gallery: `Lihat galeri`,
+    editCards: `Edit kartu`,
+    matchEachCard: `Cocokkan {n} dari setiap kartu.`,
+    warnGridIndivisible: `Total papan ({n}) harus dapat dibagi rata dengan salinan per kartu ({copies}).`,
+    warnNeedMoreImages: `Anda memerlukan {needed} gambar unik untuk papan ini tetapi hanya memiliki {have}.`,
+    warnExtraImages: `Hanya {needed} pertama dari {have} gambar Anda yang akan digunakan.`,
+    warnNoImages: `Tambahkan setidaknya satu gambar untuk memulai.`,
+    cardAltFace: `Sisi depan kartu`,
+    cardAltBack: `Sisi belakang kartu`,
+  },
+  pt: {
+    appTitle: `Memory Peek`,
+    appDescription: `O Memory Peek permite que você crie jogos da memória usando suas próprias imagens.`,
+    secImages: `Imagens das cartas`,
+    secBoard: `Tabuleiro`,
+    secBack: `Verso da carta`,
+    secHud: `Painel de jogo (oculto por padrão)`,
+    secActions: `Ações`,
+    dropzone: `Clique ou solte imagens aqui. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Colunas`,
+    rows: `Linhas`,
+    copies: `Cópias por carta`,
+    fit: `Ajuste da imagem`,
+    fitContain: `Ajustar (preservar proporção)`,
+    fitCover: `Cobrir (recortar para preencher)`,
+    fitStretch: `Esticar (sem proporção)`,
+    fitOriginal: `Tamanho original`,
+    uploadCustomBack: `Enviar verso personalizado`,
+    removeCustomBack: `Remover verso personalizado`,
+    hudMoves: `Mostrar contador de jogadas`,
+    hudTimer: `Mostrar cronômetro`,
+    hudMatches: `Mostrar pares encontrados`,
+    testPlay: `Testar jogo`,
+    download: `Baixar jogo .html`,
+    clearCards:   `Limpar cartas`,
+    confirmClear: `Remover todas as imagens das cartas? Isso não pode ser desfeito.`,
+    gameNamePlaceholder: `Nome do jogo (opcional)`,
+    actionsHint: `As imagens enviadas são mantidas apenas enquanto esta aba estiver aberta. Baixe o arquivo .html do jogo para mantê-las permanentemente.`,
+    warnDupImages: `Aviso: foram detectadas {n} imagens duplicadas. É permitido, mas pode confundir durante o jogo.`,
+    moves: `Jogadas`,
+    time: `Tempo`,
+    matches: `Pares`,
+    newGame: `Novo jogo`,
+    gallery: `Ver galeria`,
+    editCards: `Editar cartas`,
+    matchEachCard: `Combine {n} de cada carta.`,
+    warnGridIndivisible: `O total do tabuleiro ({n}) deve ser divisível pelas cópias por carta ({copies}).`,
+    warnNeedMoreImages: `Você precisa de {needed} imagens únicas para este tabuleiro, mas tem {have}.`,
+    warnExtraImages: `Apenas as primeiras {needed} das suas {have} imagens serão usadas.`,
+    warnNoImages: `Adicione pelo menos uma imagem para começar.`,
+    cardAltFace: `Frente da carta`,
+    cardAltBack: `Verso da carta`,
+  },
+  fr: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek vous permet de créer des jeux de mémoire avec vos propres images.`,
+    secImages: `Images des cartes`,
+    secBoard: `Plateau`,
+    secBack: `Dos des cartes`,
+    secHud: `Affichage de jeu (masqué par défaut)`,
+    secActions: `Actions`,
+    dropzone: `Cliquez ou déposez des images ici. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Colonnes`,
+    rows: `Lignes`,
+    copies: `Copies par carte`,
+    fit: `Ajustement de l'image`,
+    fitContain: `Adapter (conserver le ratio)`,
+    fitCover: `Couvrir (rogner pour remplir)`,
+    fitStretch: `Étirer (sans ratio)`,
+    fitOriginal: `Taille d'origine`,
+    uploadCustomBack: `Importer un dos personnalisé`,
+    removeCustomBack: `Supprimer le dos personnalisé`,
+    hudMoves: `Afficher le compteur de coups`,
+    hudTimer: `Afficher le chronomètre`,
+    hudMatches: `Afficher les paires trouvées`,
+    testPlay: `Tester le jeu`,
+    download: `Télécharger le jeu .html`,
+    clearCards:   `Effacer les cartes`,
+    confirmClear: `Supprimer toutes les images de cartes ? Cette action est irréversible.`,
+    gameNamePlaceholder: `Nom du jeu (facultatif)`,
+    actionsHint: `Les images importées ne sont conservées que tant que cet onglet est ouvert. Téléchargez le fichier .html du jeu pour les conserver de façon permanente.`,
+    warnDupImages: `Remarque : {n} images en double détectées. C'est autorisé mais peut prêter à confusion en jeu.`,
+    moves: `Coups`,
+    time: `Temps`,
+    matches: `Paires`,
+    newGame: `Nouvelle partie`,
+    gallery: `Voir la galerie`,
+    editCards: `Modifier les cartes`,
+    matchEachCard: `Associez {n} de chaque carte.`,
+    warnGridIndivisible: `Le total du plateau ({n}) doit être divisible par les copies par carte ({copies}).`,
+    warnNeedMoreImages: `Vous avez besoin de {needed} images uniques pour ce plateau mais vous en avez {have}.`,
+    warnExtraImages: `Seules les {needed} premières de vos {have} images seront utilisées.`,
+    warnNoImages: `Ajoutez au moins une image pour commencer.`,
+    cardAltFace: `Face de la carte`,
+    cardAltBack: `Dos de la carte`,
+  },
+  ja: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek では、お好きな画像で神経衰弱ゲームを作れます。`,
+    secImages: `カードの画像`,
+    secBoard: `ボード`,
+    secBack: `カードの裏面`,
+    secHud: `プレイ画面の情報表示（既定では非表示）`,
+    secActions: `操作`,
+    dropzone: `クリックまたは画像をここにドロップしてください。PNG、JPG、GIF、WebP、SVG に対応。`,
+    cols: `列数`,
+    rows: `行数`,
+    copies: `カードごとの枚数`,
+    fit: `画像の表示方法`,
+    fitContain: `合わせる（縦横比を維持）`,
+    fitCover: `カバー（切り抜いて埋める）`,
+    fitStretch: `引き伸ばす（縦横比なし）`,
+    fitOriginal: `元のサイズ`,
+    uploadCustomBack: `カスタム裏面をアップロード`,
+    removeCustomBack: `カスタム裏面を削除`,
+    hudMoves: `手数カウンターを表示`,
+    hudTimer: `経過時間タイマーを表示`,
+    hudMatches: `見つけたペア数を表示`,
+    testPlay: `テストプレイ`,
+    download: `ゲーム .html をダウンロード`,
+    clearCards:   `カードをクリア`,
+    confirmClear: `すべてのカード画像を削除しますか？この操作は元に戻せません。`,
+    gameNamePlaceholder: `ゲーム名（任意）`,
+    actionsHint: `アップロードした画像はこのタブを開いている間だけ保持されます。永久に保存するにはゲームの .html ファイルをダウンロードしてください。`,
+    warnDupImages: `注意: {n} 件の重複画像が検出されました。許可されていますが、プレイ中に混乱する可能性があります。`,
+    moves: `手数`,
+    time: `時間`,
+    matches: `ペア`,
+    newGame: `新しいゲーム`,
+    gallery: `ギャラリーを見る`,
+    editCards: `カードを編集`,
+    matchEachCard: `各カードを {n} 枚そろえてください。`,
+    warnGridIndivisible: `ボードの合計（{n}）はカードごとの枚数（{copies}）で割り切れる必要があります。`,
+    warnNeedMoreImages: `このボードには {needed} 枚のユニークな画像が必要ですが、{have} 枚しかありません。`,
+    warnExtraImages: `{have} 枚の画像のうち最初の {needed} 枚のみ使用されます。`,
+    warnNoImages: `開始するには画像を 1 枚以上追加してください。`,
+    cardAltFace: `カードの表`,
+    cardAltBack: `カードの裏`,
+  },
+  ru: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek позволяет создавать игры на запоминание с вашими собственными изображениями.`,
+    secImages: `Изображения карт`,
+    secBoard: `Поле`,
+    secBack: `Рубашка карты`,
+    secHud: `Игровой HUD (скрыт по умолчанию)`,
+    secActions: `Действия`,
+    dropzone: `Нажмите или перетащите изображения сюда. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Столбцы`,
+    rows: `Строки`,
+    copies: `Копий каждой карты`,
+    fit: `Подгонка изображения`,
+    fitContain: `Вписать (сохранить пропорции)`,
+    fitCover: `Заполнить (обрезать)`,
+    fitStretch: `Растянуть (без пропорций)`,
+    fitOriginal: `Исходный размер`,
+    uploadCustomBack: `Загрузить свою рубашку`,
+    removeCustomBack: `Удалить свою рубашку`,
+    hudMoves: `Показывать счётчик ходов`,
+    hudTimer: `Показывать таймер`,
+    hudMatches: `Показывать найденные пары`,
+    testPlay: `Пробная игра`,
+    download: `Скачать игру .html`,
+    clearCards:   `Очистить карты`,
+    confirmClear: `Удалить все изображения карт? Это нельзя отменить.`,
+    gameNamePlaceholder: `Название игры (необязательно)`,
+    actionsHint: `Загруженные изображения хранятся только пока открыта эта вкладка. Скачайте .html-файл игры, чтобы сохранить их навсегда.`,
+    warnDupImages: `Примечание: обнаружено {n} повторяющихся изображений. Это разрешено, но может запутать в игре.`,
+    moves: `Ходы`,
+    time: `Время`,
+    matches: `Пары`,
+    newGame: `Новая игра`,
+    gallery: `Открыть галерею`,
+    editCards: `Редактировать карты`,
+    matchEachCard: `Собирайте по {n} одинаковых карт.`,
+    warnGridIndivisible: `Общее число карт на поле ({n}) должно делиться на копии каждой карты ({copies}).`,
+    warnNeedMoreImages: `Для этого поля нужно {needed} уникальных изображений, а у вас {have}.`,
+    warnExtraImages: `Будут использованы только первые {needed} из ваших {have} изображений.`,
+    warnNoImages: `Добавьте хотя бы одно изображение, чтобы начать.`,
+    cardAltFace: `Лицо карты`,
+    cardAltBack: `Рубашка карты`,
+  },
+  de: {
+    appTitle: `Memory Peek`,
+    appDescription: `Mit Memory Peek erstellst du Gedächtnisspiele mit deinen eigenen Bildern.`,
+    secImages: `Kartenbilder`,
+    secBoard: `Spielfeld`,
+    secBack: `Kartenrückseite`,
+    secHud: `Spielanzeige (standardmäßig ausgeblendet)`,
+    secActions: `Aktionen`,
+    dropzone: `Bilder hier klicken oder ablegen. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Spalten`,
+    rows: `Zeilen`,
+    copies: `Kopien pro Karte`,
+    fit: `Bildanpassung`,
+    fitContain: `Einpassen (Seitenverhältnis behalten)`,
+    fitCover: `Ausfüllen (zuschneiden)`,
+    fitStretch: `Strecken (ohne Seitenverhältnis)`,
+    fitOriginal: `Originalgröße`,
+    uploadCustomBack: `Eigene Rückseite hochladen`,
+    removeCustomBack: `Eigene Rückseite entfernen`,
+    hudMoves: `Zugzähler anzeigen`,
+    hudTimer: `Zeitanzeige einblenden`,
+    hudMatches: `Gefundene Paare anzeigen`,
+    testPlay: `Testen`,
+    download: `Spiel .html herunterladen`,
+    clearCards:   `Karten leeren`,
+    confirmClear: `Alle Kartenbilder entfernen? Dies kann nicht rückgängig gemacht werden.`,
+    gameNamePlaceholder: `Spielname (optional)`,
+    actionsHint: `Hochgeladene Bilder bleiben nur erhalten, solange dieser Tab geöffnet ist. Lade die Spiel-.html-Datei herunter, um sie dauerhaft zu speichern.`,
+    warnDupImages: `Hinweis: {n} doppelte Bilder erkannt. Das ist erlaubt, kann aber beim Spielen verwirren.`,
+    moves: `Züge`,
+    time: `Zeit`,
+    matches: `Paare`,
+    newGame: `Neues Spiel`,
+    gallery: `Galerie ansehen`,
+    editCards: `Karten bearbeiten`,
+    matchEachCard: `Finde jeweils {n} gleiche Karten.`,
+    warnGridIndivisible: `Die Gesamtzahl der Felder ({n}) muss durch die Kopien pro Karte ({copies}) teilbar sein.`,
+    warnNeedMoreImages: `Für dieses Spielfeld werden {needed} eindeutige Bilder benötigt, du hast aber nur {have}.`,
+    warnExtraImages: `Es werden nur die ersten {needed} deiner {have} Bilder verwendet.`,
+    warnNoImages: `Füge mindestens ein Bild hinzu, um zu beginnen.`,
+    cardAltFace: `Kartenvorderseite`,
+    cardAltBack: `Kartenrückseite`,
+  },
+  hi: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek आपको अपनी कस्टम छवियों का उपयोग करके मेमोरी गेम बनाने देता है।`,
+    secImages: `कार्ड की छवियाँ`,
+    secBoard: `बोर्ड`,
+    secBack: `कार्ड का पिछला भाग`,
+    secHud: `गेम जानकारी पट्टी (डिफ़ॉल्ट रूप से छिपी)`,
+    secActions: `क्रियाएँ`,
+    dropzone: `यहाँ क्लिक करें या छवियाँ छोड़ें। PNG, JPG, GIF, WebP, SVG।`,
+    cols: `कॉलम`,
+    rows: `पंक्तियाँ`,
+    copies: `प्रति कार्ड प्रतियाँ`,
+    fit: `छवि फ़िट`,
+    fitContain: `फ़िट (अनुपात बनाए रखें)`,
+    fitCover: `कवर (भरने के लिए काटें)`,
+    fitStretch: `खींचें (अनुपात नहीं)`,
+    fitOriginal: `मूल आकार`,
+    uploadCustomBack: `कस्टम पिछला भाग अपलोड करें`,
+    removeCustomBack: `कस्टम पिछला भाग हटाएँ`,
+    hudMoves: `चाल काउंटर दिखाएँ`,
+    hudTimer: `टाइमर दिखाएँ`,
+    hudMatches: `मिले जोड़े दिखाएँ`,
+    testPlay: `परीक्षण खेलें`,
+    download: `गेम .html डाउनलोड करें`,
+    clearCards:   `कार्ड साफ़ करें`,
+    confirmClear: `सभी कार्ड चित्र हटाएँ? इसे पूर्ववत नहीं किया जा सकता।`,
+    gameNamePlaceholder: `गेम का नाम (वैकल्पिक)`,
+    actionsHint: `अपलोड की गई छवियाँ केवल तब तक रहती हैं जब तक यह टैब खुला है। उन्हें स्थायी रूप से रखने के लिए गेम .html फ़ाइल डाउनलोड करें।`,
+    warnDupImages: `सूचना: {n} डुप्लिकेट छवियाँ मिलीं। यह अनुमत है लेकिन खेलते समय भ्रम हो सकता है।`,
+    moves: `चालें`,
+    time: `समय`,
+    matches: `जोड़े`,
+    newGame: `नया गेम`,
+    gallery: `गैलरी देखें`,
+    editCards: `कार्ड संपादित करें`,
+    matchEachCard: `प्रत्येक कार्ड के {n} मिलाएँ।`,
+    warnGridIndivisible: `बोर्ड का कुल ({n}) प्रति कार्ड प्रतियों ({copies}) से पूरी तरह विभाज्य होना चाहिए।`,
+    warnNeedMoreImages: `इस बोर्ड के लिए आपको {needed} अनूठी छवियाँ चाहिए लेकिन आपके पास {have} हैं।`,
+    warnExtraImages: `आपकी {have} छवियों में से केवल पहली {needed} का उपयोग होगा।`,
+    warnNoImages: `शुरू करने के लिए कम से कम एक छवि जोड़ें।`,
+    cardAltFace: `कार्ड का अग्र भाग`,
+    cardAltBack: `कार्ड का पिछला भाग`,
+  },
+  bn: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek আপনাকে নিজের কাস্টম ছবি ব্যবহার করে মেমরি গেম তৈরি করতে দেয়।`,
+    secImages: `কার্ডের ছবি`,
+    secBoard: `বোর্ড`,
+    secBack: `কার্ডের পেছন`,
+    secHud: `খেলার তথ্য বার (ডিফল্টে লুকানো)`,
+    secActions: `ক্রিয়াকলাপ`,
+    dropzone: `এখানে ক্লিক করুন বা ছবি ছাড়ুন। PNG, JPG, GIF, WebP, SVG।`,
+    cols: `কলাম`,
+    rows: `সারি`,
+    copies: `প্রতি কার্ডে কপি`,
+    fit: `ছবির ফিট`,
+    fitContain: `ফিট (অনুপাত বজায় রাখুন)`,
+    fitCover: `কভার (পূরণে কাটুন)`,
+    fitStretch: `প্রসারিত (অনুপাত নেই)`,
+    fitOriginal: `মূল আকার`,
+    uploadCustomBack: `কাস্টম পেছন আপলোড করুন`,
+    removeCustomBack: `কাস্টম পেছন সরান`,
+    hudMoves: `চাল গণনা দেখান`,
+    hudTimer: `টাইমার দেখান`,
+    hudMatches: `প্রাপ্ত জোড় দেখান`,
+    testPlay: `পরীক্ষামূলক খেলা`,
+    download: `গেম .html ডাউনলোড করুন`,
+    clearCards:   `কার্ড সাফ করুন`,
+    confirmClear: `সমস্ত কার্ড ছবি মুছে ফেলবেন? এটি পূর্বাবস্থায় ফেরানো যাবে না।`,
+    gameNamePlaceholder: `গেমের নাম (ঐচ্ছিক)`,
+    actionsHint: `আপলোড করা ছবি কেবল এই ট্যাব খোলা থাকা পর্যন্ত রাখা হয়। স্থায়ীভাবে রাখতে গেমের .html ফাইলটি ডাউনলোড করুন।`,
+    warnDupImages: `দ্রষ্টব্য: {n}টি ডুপ্লিকেট ছবি পাওয়া গেছে। এটি অনুমোদিত হলেও খেলার সময় বিভ্রান্তিকর হতে পারে।`,
+    moves: `চাল`,
+    time: `সময়`,
+    matches: `জোড়`,
+    newGame: `নতুন গেম`,
+    gallery: `গ্যালারি দেখুন`,
+    editCards: `কার্ড সম্পাদনা করুন`,
+    matchEachCard: `প্রতিটি কার্ডের {n}টি মেলান।`,
+    warnGridIndivisible: `বোর্ডের মোট ({n}) প্রতি কার্ডের কপির সংখ্যা ({copies}) দ্বারা সমভাবে বিভাজ্য হতে হবে।`,
+    warnNeedMoreImages: `এই বোর্ডের জন্য {needed}টি অনন্য ছবি প্রয়োজন, কিন্তু আপনার আছে {have}টি।`,
+    warnExtraImages: `আপনার {have}টি ছবির মধ্যে শুধু প্রথম {needed}টি ব্যবহার হবে।`,
+    warnNoImages: `শুরু করতে অন্তত একটি ছবি যোগ করুন।`,
+    cardAltFace: `কার্ডের সামনের দিক`,
+    cardAltBack: `কার্ডের পেছনের দিক`,
+  },
+  ur: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek آپ کو اپنی پسند کی تصاویر استعمال کرتے ہوئے میموری گیمز بنانے کی سہولت دیتا ہے۔`,
+    secImages: `کارڈ کی تصاویر`,
+    secBoard: `بورڈ`,
+    secBack: `کارڈ کا پچھلا حصہ`,
+    secHud: `کھیل کی معلوماتی پٹی (طے شدہ طور پر چھپی ہوئی)`,
+    secActions: `اعمال`,
+    dropzone: `یہاں کلک کریں یا تصاویر چھوڑیں۔ PNG، JPG، GIF، WebP، SVG۔`,
+    cols: `کالم`,
+    rows: `قطاریں`,
+    copies: `فی کارڈ کاپیاں`,
+    fit: `تصویر کی فِٹنگ`,
+    fitContain: `فِٹ (تناسب برقرار رکھیں)`,
+    fitCover: `ڈھانپیں (بھرنے کے لیے کاٹیں)`,
+    fitStretch: `کھینچیں (بغیر تناسب)`,
+    fitOriginal: `اصل سائز`,
+    uploadCustomBack: `حسبِ ضرورت پچھلا حصہ اپلوڈ کریں`,
+    removeCustomBack: `حسبِ ضرورت پچھلا حصہ ہٹائیں`,
+    hudMoves: `چال شمار دکھائیں`,
+    hudTimer: `ٹائمر دکھائیں`,
+    hudMatches: `ملنے والے جوڑے دکھائیں`,
+    testPlay: `آزمائشی کھیل`,
+    download: `گیم .html ڈاؤن لوڈ کریں`,
+    clearCards:   `کارڈز صاف کریں`,
+    confirmClear: `تمام کارڈ تصاویر کو ہٹا دیں؟ اس کو واپس نہیں کیا جا سکتا۔`,
+    gameNamePlaceholder: `گیم کا نام (اختیاری)`,
+    actionsHint: `اپلوڈ کی گئی تصاویر صرف اسی وقت تک محفوظ رہتی ہیں جب تک یہ ٹیب کھلا ہو۔ مستقل رکھنے کے لیے گیم کی .html فائل ڈاؤن لوڈ کریں۔`,
+    warnDupImages: `نوٹ: {n} نقلی تصاویر کا پتہ چلا۔ یہ اجازت ہے لیکن کھیلتے وقت الجھن پیدا کر سکتی ہیں۔`,
+    moves: `چالیں`,
+    time: `وقت`,
+    matches: `جوڑے`,
+    newGame: `نیا گیم`,
+    gallery: `گیلری دیکھیں`,
+    editCards: `کارڈ ترتیب دیں`,
+    matchEachCard: `ہر کارڈ کے {n} ملائیں۔`,
+    warnGridIndivisible: `بورڈ کا کل ({n}) فی کارڈ کاپیوں ({copies}) سے مکمل تقسیم ہونا چاہیے۔`,
+    warnNeedMoreImages: `اس بورڈ کے لیے آپ کو {needed} منفرد تصاویر چاہئیں لیکن آپ کے پاس {have} ہیں۔`,
+    warnExtraImages: `آپ کی {have} تصاویر میں سے صرف پہلی {needed} استعمال ہوں گی۔`,
+    warnNoImages: `شروع کرنے کے لیے کم از کم ایک تصویر شامل کریں۔`,
+    cardAltFace: `کارڈ کا چہرہ`,
+    cardAltBack: `کارڈ کا پچھلا حصہ`,
+  },
+  ko: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek으로 직접 만든 이미지로 메모리 게임을 만들 수 있습니다.`,
+    secImages: `카드 이미지`,
+    secBoard: `보드`,
+    secBack: `카드 뒷면`,
+    secHud: `플레이 정보 표시(기본 숨김)`,
+    secActions: `작업`,
+    dropzone: `이미지를 클릭하거나 여기에 끌어다 놓으세요. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `열`,
+    rows: `행`,
+    copies: `카드당 사본 수`,
+    fit: `이미지 맞춤`,
+    fitContain: `맞춤 (비율 유지)`,
+    fitCover: `채우기 (잘라서 채움)`,
+    fitStretch: `늘이기 (비율 무시)`,
+    fitOriginal: `원본 크기`,
+    uploadCustomBack: `사용자 뒷면 업로드`,
+    removeCustomBack: `사용자 뒷면 제거`,
+    hudMoves: `이동 횟수 표시`,
+    hudTimer: `경과 시간 표시`,
+    hudMatches: `찾은 짝 수 표시`,
+    testPlay: `테스트 플레이`,
+    download: `게임 .html 다운로드`,
+    clearCards:   `카드 비우기`,
+    confirmClear: `모든 카드 이미지를 삭제하시겠습니까? 되돌릴 수 없습니다.`,
+    gameNamePlaceholder: `게임 이름(선택)`,
+    actionsHint: `업로드한 이미지는 이 탭이 열려 있는 동안에만 보관됩니다. 영구 보관하려면 게임 .html 파일을 다운로드하세요.`,
+    warnDupImages: `참고: 중복 이미지 {n}개가 감지되었습니다. 허용되지만 플레이 중 혼란을 줄 수 있습니다.`,
+    moves: `이동`,
+    time: `시간`,
+    matches: `짝`,
+    newGame: `새 게임`,
+    gallery: `갤러리 보기`,
+    editCards: `카드 편집`,
+    matchEachCard: `각 카드를 {n}장씩 맞추세요.`,
+    warnGridIndivisible: `보드 총 칸 수({n})는 카드당 사본 수({copies})로 나누어떨어져야 합니다.`,
+    warnNeedMoreImages: `이 보드에는 고유 이미지 {needed}장이 필요하지만 {have}장만 있습니다.`,
+    warnExtraImages: `{have}장 중 처음 {needed}장만 사용됩니다.`,
+    warnNoImages: `시작하려면 이미지를 한 장 이상 추가하세요.`,
+    cardAltFace: `카드 앞면`,
+    cardAltBack: `카드 뒷면`,
+  },
+  vi: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek cho phép bạn tạo trò chơi ghi nhớ bằng hình ảnh tùy chỉnh của riêng bạn.`,
+    secImages: `Hình ảnh thẻ`,
+    secBoard: `Bàn chơi`,
+    secBack: `Mặt sau thẻ`,
+    secHud: `Bảng thông tin chơi (mặc định ẩn)`,
+    secActions: `Hành động`,
+    dropzone: `Nhấp hoặc thả hình ảnh vào đây. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Cột`,
+    rows: `Hàng`,
+    copies: `Số bản sao mỗi thẻ`,
+    fit: `Cách vừa khít hình`,
+    fitContain: `Vừa (giữ tỷ lệ)`,
+    fitCover: `Phủ kín (cắt để lấp đầy)`,
+    fitStretch: `Kéo giãn (không giữ tỷ lệ)`,
+    fitOriginal: `Kích thước gốc`,
+    uploadCustomBack: `Tải lên mặt sau tùy chỉnh`,
+    removeCustomBack: `Gỡ mặt sau tùy chỉnh`,
+    hudMoves: `Hiển thị bộ đếm lượt`,
+    hudTimer: `Hiển thị đồng hồ`,
+    hudMatches: `Hiển thị số cặp đã tìm`,
+    testPlay: `Chơi thử`,
+    download: `Tải game .html`,
+    clearCards:   `Xóa thẻ`,
+    confirmClear: `Xóa tất cả ảnh thẻ? Thao tác này không thể hoàn tác.`,
+    gameNamePlaceholder: `Tên game (tùy chọn)`,
+    actionsHint: `Hình ảnh đã tải lên chỉ được giữ trong khi tab này còn mở. Tải tệp .html của game để giữ chúng vĩnh viễn.`,
+    warnDupImages: `Lưu ý: phát hiện {n} hình ảnh trùng lặp. Được cho phép nhưng có thể gây nhầm lẫn khi chơi.`,
+    moves: `Lượt`,
+    time: `Thời gian`,
+    matches: `Cặp`,
+    newGame: `Game mới`,
+    gallery: `Xem thư viện`,
+    editCards: `Sửa thẻ`,
+    matchEachCard: `Ghép {n} cho mỗi thẻ.`,
+    warnGridIndivisible: `Tổng số ô bàn chơi ({n}) phải chia hết cho số bản sao mỗi thẻ ({copies}).`,
+    warnNeedMoreImages: `Bạn cần {needed} hình ảnh khác nhau cho bàn chơi này nhưng chỉ có {have}.`,
+    warnExtraImages: `Chỉ {needed} hình đầu trong {have} hình của bạn sẽ được dùng.`,
+    warnNoImages: `Thêm ít nhất một hình ảnh để bắt đầu.`,
+    cardAltFace: `Mặt trước thẻ`,
+    cardAltBack: `Mặt sau thẻ`,
+  },
+  tr: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek, kendi özel görsellerinizle hafıza oyunları oluşturmanıza olanak tanır.`,
+    secImages: `Kart görselleri`,
+    secBoard: `Tahta`,
+    secBack: `Kart arkası`,
+    secHud: `Oyun bilgi çubuğu (varsayılan olarak gizli)`,
+    secActions: `İşlemler`,
+    dropzone: `Tıklayın veya görselleri buraya bırakın. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Sütun`,
+    rows: `Satır`,
+    copies: `Kart başına kopya`,
+    fit: `Görsel sığdırma`,
+    fitContain: `Sığdır (oranı koru)`,
+    fitCover: `Kapla (kırparak doldur)`,
+    fitStretch: `Uzat (oransız)`,
+    fitOriginal: `Orijinal boyut`,
+    uploadCustomBack: `Özel arka yüz yükle`,
+    removeCustomBack: `Özel arka yüzü kaldır`,
+    hudMoves: `Hamle sayacını göster`,
+    hudTimer: `Süre sayacını göster`,
+    hudMatches: `Bulunan eşleşmeleri göster`,
+    testPlay: `Test et`,
+    download: `Oyun .html dosyasını indir`,
+    clearCards:   `Kartları temizle`,
+    confirmClear: `Tüm kart resimleri silinsin mi? Bu işlem geri alınamaz.`,
+    gameNamePlaceholder: `Oyun adı (isteğe bağlı)`,
+    actionsHint: `Yüklenen görseller yalnızca bu sekme açıkken saklanır. Kalıcı saklamak için oyunun .html dosyasını indirin.`,
+    warnDupImages: `Not: {n} yinelenen görsel bulundu. İzin verilir ancak oyun sırasında kafa karıştırıcı olabilir.`,
+    moves: `Hamle`,
+    time: `Süre`,
+    matches: `Eşleşme`,
+    newGame: `Yeni oyun`,
+    gallery: `Galeriyi gör`,
+    editCards: `Kartları düzenle`,
+    matchEachCard: `Her karttan {n} tane eşleştirin.`,
+    warnGridIndivisible: `Tahta toplamı ({n}), kart başına kopyaya ({copies}) tam bölünebilir olmalı.`,
+    warnNeedMoreImages: `Bu tahta için {needed} benzersiz görsel gerekiyor ama {have} adediniz var.`,
+    warnExtraImages: `{have} görselinizin yalnızca ilk {needed} tanesi kullanılacak.`,
+    warnNoImages: `Başlamak için en az bir görsel ekleyin.`,
+    cardAltFace: `Kartın ön yüzü`,
+    cardAltBack: `Kartın arka yüzü`,
+  },
+  it: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek ti permette di creare giochi di memoria con le tue immagini personalizzate.`,
+    secImages: `Immagini delle carte`,
+    secBoard: `Tabellone`,
+    secBack: `Retro delle carte`,
+    secHud: `Pannello di gioco (nascosto per impostazione predefinita)`,
+    secActions: `Azioni`,
+    dropzone: `Fai clic o trascina le immagini qui. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Colonne`,
+    rows: `Righe`,
+    copies: `Copie per carta`,
+    fit: `Adattamento immagine`,
+    fitContain: `Adatta (mantieni proporzioni)`,
+    fitCover: `Riempi (ritaglia per riempire)`,
+    fitStretch: `Allunga (senza proporzioni)`,
+    fitOriginal: `Dimensione originale`,
+    uploadCustomBack: `Carica retro personalizzato`,
+    removeCustomBack: `Rimuovi retro personalizzato`,
+    hudMoves: `Mostra contatore mosse`,
+    hudTimer: `Mostra cronometro`,
+    hudMatches: `Mostra coppie trovate`,
+    testPlay: `Prova`,
+    download: `Scarica gioco .html`,
+    clearCards:   `Cancella carte`,
+    confirmClear: `Rimuovere tutte le immagini delle carte? Questa operazione non può essere annullata.`,
+    gameNamePlaceholder: `Nome del gioco (facoltativo)`,
+    actionsHint: `Le immagini caricate vengono conservate solo finché questa scheda è aperta. Scarica il file .html del gioco per conservarle in modo permanente.`,
+    warnDupImages: `Nota: rilevate {n} immagini duplicate. È consentito ma può creare confusione in gioco.`,
+    moves: `Mosse`,
+    time: `Tempo`,
+    matches: `Coppie`,
+    newGame: `Nuova partita`,
+    gallery: `Vedi galleria`,
+    editCards: `Modifica carte`,
+    matchEachCard: `Abbina {n} di ciascuna carta.`,
+    warnGridIndivisible: `Il totale del tabellone ({n}) deve essere divisibile per le copie per carta ({copies}).`,
+    warnNeedMoreImages: `Servono {needed} immagini uniche per questo tabellone, ma ne hai {have}.`,
+    warnExtraImages: `Verranno usate solo le prime {needed} delle tue {have} immagini.`,
+    warnNoImages: `Aggiungi almeno un'immagine per iniziare.`,
+    cardAltFace: `Fronte della carta`,
+    cardAltBack: `Retro della carta`,
+  },
+  nl: {
+    appTitle: `Memory Peek`,
+    appDescription: `Met Memory Peek maak je geheugenspellen met je eigen afbeeldingen.`,
+    secImages: `Kaartafbeeldingen`,
+    secBoard: `Speelbord`,
+    secBack: `Achterkant van kaart`,
+    secHud: `Speelpaneel (standaard verborgen)`,
+    secActions: `Acties`,
+    dropzone: `Klik of sleep afbeeldingen hierheen. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Kolommen`,
+    rows: `Rijen`,
+    copies: `Kopieën per kaart`,
+    fit: `Afbeeldingspassing`,
+    fitContain: `Passend (verhouding behouden)`,
+    fitCover: `Bedekken (bijsnijden om te vullen)`,
+    fitStretch: `Uitrekken (geen verhouding)`,
+    fitOriginal: `Originele grootte`,
+    uploadCustomBack: `Eigen achterkant uploaden`,
+    removeCustomBack: `Eigen achterkant verwijderen`,
+    hudMoves: `Zettenteller tonen`,
+    hudTimer: `Tijdmeter tonen`,
+    hudMatches: `Gevonden paren tonen`,
+    testPlay: `Testen`,
+    download: `Spel .html downloaden`,
+    clearCards:   `Kaarten wissen`,
+    confirmClear: `Alle kaartafbeeldingen verwijderen? Dit kan niet ongedaan worden gemaakt.`,
+    gameNamePlaceholder: `Spelnaam (optioneel)`,
+    actionsHint: `Geüploade afbeeldingen blijven alleen bewaard zolang dit tabblad open is. Download het .html-bestand van het spel om ze permanent te bewaren.`,
+    warnDupImages: `Let op: {n} dubbele afbeeldingen gevonden. Dat is toegestaan maar kan verwarrend zijn tijdens het spelen.`,
+    moves: `Zetten`,
+    time: `Tijd`,
+    matches: `Paren`,
+    newGame: `Nieuw spel`,
+    gallery: `Galerij bekijken`,
+    editCards: `Kaarten bewerken`,
+    matchEachCard: `Vind {n} van elke kaart.`,
+    warnGridIndivisible: `Het totaal van het bord ({n}) moet deelbaar zijn door de kopieën per kaart ({copies}).`,
+    warnNeedMoreImages: `Je hebt {needed} unieke afbeeldingen nodig voor dit bord, maar je hebt er {have}.`,
+    warnExtraImages: `Alleen de eerste {needed} van je {have} afbeeldingen worden gebruikt.`,
+    warnNoImages: `Voeg minstens één afbeelding toe om te beginnen.`,
+    cardAltFace: `Voorkant van kaart`,
+    cardAltBack: `Achterkant van kaart`,
+  },
+  pl: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek pozwala tworzyć gry pamięciowe z własnymi obrazami.`,
+    secImages: `Obrazy kart`,
+    secBoard: `Plansza`,
+    secBack: `Rewers karty`,
+    secHud: `Pasek gry (domyślnie ukryty)`,
+    secActions: `Akcje`,
+    dropzone: `Kliknij lub upuść obrazy tutaj. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Kolumny`,
+    rows: `Wiersze`,
+    copies: `Kopie na kartę`,
+    fit: `Dopasowanie obrazu`,
+    fitContain: `Dopasuj (zachowaj proporcje)`,
+    fitCover: `Wypełnij (przytnij)`,
+    fitStretch: `Rozciągnij (bez proporcji)`,
+    fitOriginal: `Rozmiar oryginalny`,
+    uploadCustomBack: `Wgraj własny rewers`,
+    removeCustomBack: `Usuń własny rewers`,
+    hudMoves: `Pokaż licznik ruchów`,
+    hudTimer: `Pokaż licznik czasu`,
+    hudMatches: `Pokaż znalezione pary`,
+    testPlay: `Test gry`,
+    download: `Pobierz grę .html`,
+    clearCards:   `Wyczyść karty`,
+    confirmClear: `Usunąć wszystkie obrazy kart? Tego nie można cofnąć.`,
+    gameNamePlaceholder: `Nazwa gry (opcjonalnie)`,
+    actionsHint: `Wgrane obrazy są przechowywane tylko dopóki ta karta jest otwarta. Pobierz plik .html gry, aby zachować je na stałe.`,
+    warnDupImages: `Uwaga: wykryto {n} zduplikowanych obrazów. Jest to dozwolone, ale może być mylące w grze.`,
+    moves: `Ruchy`,
+    time: `Czas`,
+    matches: `Pary`,
+    newGame: `Nowa gra`,
+    gallery: `Zobacz galerię`,
+    editCards: `Edytuj karty`,
+    matchEachCard: `Dopasuj {n} z każdej karty.`,
+    warnGridIndivisible: `Łączna liczba pól ({n}) musi być podzielna przez liczbę kopii na kartę ({copies}).`,
+    warnNeedMoreImages: `Potrzebujesz {needed} unikatowych obrazów do tej planszy, a masz {have}.`,
+    warnExtraImages: `Zostanie użytych tylko pierwsze {needed} z twoich {have} obrazów.`,
+    warnNoImages: `Dodaj przynajmniej jeden obraz, aby zacząć.`,
+    cardAltFace: `Awers karty`,
+    cardAltBack: `Rewers karty`,
+  },
+  th: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek ให้คุณสร้างเกมจับคู่ความจำด้วยภาพของคุณเอง`,
+    secImages: `รูปการ์ด`,
+    secBoard: `กระดาน`,
+    secBack: `ด้านหลังการ์ด`,
+    secHud: `แถบข้อมูลเกม (ซ่อนเป็นค่าเริ่มต้น)`,
+    secActions: `การดำเนินการ`,
+    dropzone: `คลิกหรือวางรูปที่นี่ รองรับ PNG, JPG, GIF, WebP, SVG`,
+    cols: `คอลัมน์`,
+    rows: `แถว`,
+    copies: `จำนวนสำเนาต่อใบ`,
+    fit: `การพอดีรูปภาพ`,
+    fitContain: `พอดี (รักษาอัตราส่วน)`,
+    fitCover: `เต็มพื้นที่ (ตัดให้เต็ม)`,
+    fitStretch: `ยืด (ไม่รักษาอัตราส่วน)`,
+    fitOriginal: `ขนาดต้นฉบับ`,
+    uploadCustomBack: `อัปโหลดด้านหลังแบบกำหนดเอง`,
+    removeCustomBack: `ลบด้านหลังแบบกำหนดเอง`,
+    hudMoves: `แสดงตัวนับการเล่น`,
+    hudTimer: `แสดงนาฬิกาจับเวลา`,
+    hudMatches: `แสดงคู่ที่จับได้`,
+    testPlay: `ทดลองเล่น`,
+    download: `ดาวน์โหลดเกม .html`,
+    clearCards:   `ล้างการ์ด`,
+    confirmClear: `ลบรูปภาพการ์ดทั้งหมดหรือไม่? การกระทำนี้ไม่สามารถเลิกทำได้`,
+    gameNamePlaceholder: `ชื่อเกม (ไม่บังคับ)`,
+    actionsHint: `รูปที่อัปโหลดจะถูกเก็บไว้เฉพาะตอนที่แท็บนี้เปิดอยู่ ดาวน์โหลดไฟล์ .html ของเกมเพื่อเก็บไว้ถาวร`,
+    warnDupImages: `หมายเหตุ: พบรูปซ้ำ {n} รูป อนุญาตให้ใช้ได้แต่อาจทำให้สับสนตอนเล่น`,
+    moves: `การเล่น`,
+    time: `เวลา`,
+    matches: `คู่ที่จับ`,
+    newGame: `เกมใหม่`,
+    gallery: `ดูแกลเลอรี`,
+    editCards: `แก้ไขการ์ด`,
+    matchEachCard: `จับคู่การ์ดแต่ละแบบ {n} ใบ`,
+    warnGridIndivisible: `จำนวนช่องในกระดาน ({n}) ต้องหารด้วยจำนวนสำเนาต่อใบ ({copies}) ลงตัว`,
+    warnNeedMoreImages: `กระดานนี้ต้องการรูปไม่ซ้ำ {needed} รูป แต่คุณมี {have} รูป`,
+    warnExtraImages: `จะใช้เฉพาะ {needed} รูปแรกจาก {have} รูปของคุณ`,
+    warnNoImages: `เพิ่มรูปอย่างน้อยหนึ่งรูปเพื่อเริ่ม`,
+    cardAltFace: `ด้านหน้าการ์ด`,
+    cardAltBack: `ด้านหลังการ์ด`,
+  },
+  fa: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek به شما امکان می‌دهد بازی‌های حافظه با تصاویر دلخواه خود بسازید.`,
+    secImages: `تصاویر کارت`,
+    secBoard: `صفحه`,
+    secBack: `پشت کارت`,
+    secHud: `نوار اطلاعات بازی (به‌طور پیش‌فرض پنهان)`,
+    secActions: `عملیات`,
+    dropzone: `کلیک کنید یا تصاویر را اینجا رها کنید. PNG، JPG، GIF، WebP، SVG.`,
+    cols: `ستون‌ها`,
+    rows: `سطرها`,
+    copies: `تعداد نسخه از هر کارت`,
+    fit: `جا‌سازی تصویر`,
+    fitContain: `جا (حفظ نسبت)`,
+    fitCover: `پوشش (برش برای پر کردن)`,
+    fitStretch: `کشیدن (بدون نسبت)`,
+    fitOriginal: `اندازه اصلی`,
+    uploadCustomBack: `بارگذاری پشت سفارشی`,
+    removeCustomBack: `حذف پشت سفارشی`,
+    hudMoves: `نمایش شمارنده حرکت`,
+    hudTimer: `نمایش زمان‌سنج`,
+    hudMatches: `نمایش جفت‌های یافته`,
+    testPlay: `بازی آزمایشی`,
+    download: `دانلود بازی .html`,
+    clearCards:   `پاک کردن کارت‌ها`,
+    confirmClear: `همه تصاویر کارت حذف شود؟ این عمل قابل بازگشت نیست.`,
+    gameNamePlaceholder: `نام بازی (اختیاری)`,
+    actionsHint: `تصاویر بارگذاری‌شده فقط تا زمانی که این تب باز باشد نگه داشته می‌شوند. برای ذخیره دائمی، فایل .html بازی را دانلود کنید.`,
+    warnDupImages: `توجه: {n} تصویر تکراری شناسایی شد. مجاز است اما ممکن است هنگام بازی گیج‌کننده باشد.`,
+    moves: `حرکت‌ها`,
+    time: `زمان`,
+    matches: `جفت‌ها`,
+    newGame: `بازی جدید`,
+    gallery: `مشاهده گالری`,
+    editCards: `ویرایش کارت‌ها`,
+    matchEachCard: `از هر کارت {n} عدد را جفت کنید.`,
+    warnGridIndivisible: `مجموع خانه‌های صفحه ({n}) باید بر تعداد نسخه هر کارت ({copies}) بخش‌پذیر باشد.`,
+    warnNeedMoreImages: `برای این صفحه به {needed} تصویر یکتا نیاز دارید اما {have} تصویر دارید.`,
+    warnExtraImages: `فقط {needed} تصویر اول از {have} تصویر شما استفاده می‌شود.`,
+    warnNoImages: `برای شروع حداقل یک تصویر اضافه کنید.`,
+    cardAltFace: `روی کارت`,
+    cardAltBack: `پشت کارت`,
+  },
+  uk: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek дозволяє створювати ігри на запам’ятовування з вашими власними зображеннями.`,
+    secImages: `Зображення карт`,
+    secBoard: `Поле`,
+    secBack: `Зворот карти`,
+    secHud: `Інформаційна панель гри (за замовчуванням прихована)`,
+    secActions: `Дії`,
+    dropzone: `Натисніть або перетягніть зображення сюди. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Стовпці`,
+    rows: `Рядки`,
+    copies: `Копій кожної карти`,
+    fit: `Підгонка зображення`,
+    fitContain: `Вмістити (зберегти пропорції)`,
+    fitCover: `Заповнити (обрізати)`,
+    fitStretch: `Розтягнути (без пропорцій)`,
+    fitOriginal: `Оригінальний розмір`,
+    uploadCustomBack: `Завантажити власний зворот`,
+    removeCustomBack: `Видалити власний зворот`,
+    hudMoves: `Показувати лічильник ходів`,
+    hudTimer: `Показувати таймер`,
+    hudMatches: `Показувати знайдені пари`,
+    testPlay: `Тестова гра`,
+    download: `Завантажити гру .html`,
+    clearCards:   `Очистити картки`,
+    confirmClear: `Видалити всі зображення карток? Це не можна скасувати.`,
+    gameNamePlaceholder: `Назва гри (необов'язково)`,
+    actionsHint: `Завантажені зображення зберігаються лише поки відкрита ця вкладка. Завантажте .html-файл гри, щоб зберегти їх назавжди.`,
+    warnDupImages: `Примітка: виявлено {n} повторюваних зображень. Це дозволено, але може заплутати під час гри.`,
+    moves: `Ходи`,
+    time: `Час`,
+    matches: `Пари`,
+    newGame: `Нова гра`,
+    gallery: `Переглянути галерею`,
+    editCards: `Редагувати карти`,
+    matchEachCard: `Збирайте по {n} однакових карт.`,
+    warnGridIndivisible: `Загальна кількість клітинок ({n}) має ділитися на кількість копій кожної карти ({copies}).`,
+    warnNeedMoreImages: `Для цього поля потрібно {needed} унікальних зображень, а у вас {have}.`,
+    warnExtraImages: `Буде використано лише перші {needed} з ваших {have} зображень.`,
+    warnNoImages: `Додайте принаймні одне зображення, щоб почати.`,
+    cardAltFace: `Лицьовий бік карти`,
+    cardAltBack: `Зворот карти`,
+  },
+  cs: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek vám umožňuje vytvářet paměťové hry s vlastními obrázky.`,
+    secImages: `Obrázky karet`,
+    secBoard: `Hrací plocha`,
+    secBack: `Rub karty`,
+    secHud: `Herní panel (ve výchozím nastavení skrytý)`,
+    secActions: `Akce`,
+    dropzone: `Klikněte nebo sem přetáhněte obrázky. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Sloupce`,
+    rows: `Řádky`,
+    copies: `Kopie na kartu`,
+    fit: `Přizpůsobení obrázku`,
+    fitContain: `Vměstnat (zachovat poměr)`,
+    fitCover: `Vyplnit (oříznout)`,
+    fitStretch: `Roztáhnout (bez poměru)`,
+    fitOriginal: `Původní velikost`,
+    uploadCustomBack: `Nahrát vlastní rub`,
+    removeCustomBack: `Odebrat vlastní rub`,
+    hudMoves: `Zobrazit počítadlo tahů`,
+    hudTimer: `Zobrazit časomíru`,
+    hudMatches: `Zobrazit nalezené dvojice`,
+    testPlay: `Vyzkoušet`,
+    download: `Stáhnout hru .html`,
+    clearCards:   `Vymazat karty`,
+    confirmClear: `Odstranit všechny obrázky karet? Toto nelze vrátit zpět.`,
+    gameNamePlaceholder: `Název hry (volitelné)`,
+    actionsHint: `Nahrané obrázky se uchovávají pouze po dobu, kdy je tato karta otevřená. Stáhněte si soubor .html hry, abyste je zachovali natrvalo.`,
+    warnDupImages: `Poznámka: zjištěno {n} duplicitních obrázků. Je to povoleno, ale při hraní to může mást.`,
+    moves: `Tahy`,
+    time: `Čas`,
+    matches: `Dvojice`,
+    newGame: `Nová hra`,
+    gallery: `Zobrazit galerii`,
+    editCards: `Upravit karty`,
+    matchEachCard: `Spárujte {n} od každé karty.`,
+    warnGridIndivisible: `Celkový počet polí ({n}) musí být dělitelný počtem kopií na kartu ({copies}).`,
+    warnNeedMoreImages: `Pro tuto plochu potřebujete {needed} jedinečných obrázků, ale máte jen {have}.`,
+    warnExtraImages: `Použije se pouze prvních {needed} z vašich {have} obrázků.`,
+    warnNoImages: `Pro začátek přidejte alespoň jeden obrázek.`,
+    cardAltFace: `Líc karty`,
+    cardAltBack: `Rub karty`,
+  },
+  ms: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek membolehkan anda mencipta permainan ingatan menggunakan imej tersuai anda sendiri.`,
+    secImages: `Imej kad`,
+    secBoard: `Papan`,
+    secBack: `Belakang kad`,
+    secHud: `Panel maklumat permainan (tersembunyi secara lalai)`,
+    secActions: `Tindakan`,
+    dropzone: `Klik atau lepaskan imej di sini. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Lajur`,
+    rows: `Baris`,
+    copies: `Salinan setiap kad`,
+    fit: `Suaian imej`,
+    fitContain: `Suai (kekalkan nisbah)`,
+    fitCover: `Tutup (potong untuk memenuhi)`,
+    fitStretch: `Regangkan (tanpa nisbah)`,
+    fitOriginal: `Saiz asal`,
+    uploadCustomBack: `Muat naik belakang tersuai`,
+    removeCustomBack: `Buang belakang tersuai`,
+    hudMoves: `Tunjukkan kaunter langkah`,
+    hudTimer: `Tunjukkan pemasa`,
+    hudMatches: `Tunjukkan padanan ditemui`,
+    testPlay: `Cuba main`,
+    download: `Muat turun permainan .html`,
+    clearCards:   `Padam kad`,
+    confirmClear: `Padam semua imej kad? Tindakan ini tidak boleh dibatalkan.`,
+    gameNamePlaceholder: `Nama permainan (pilihan)`,
+    actionsHint: `Imej yang dimuat naik hanya disimpan selagi tab ini terbuka. Muat turun fail .html permainan untuk menyimpannya secara kekal.`,
+    warnDupImages: `Nota: dikesan {n} imej berulang. Ia dibenarkan tetapi mungkin mengelirukan semasa bermain.`,
+    moves: `Langkah`,
+    time: `Masa`,
+    matches: `Padanan`,
+    newGame: `Permainan baharu`,
+    gallery: `Lihat galeri`,
+    editCards: `Edit kad`,
+    matchEachCard: `Padankan {n} bagi setiap kad.`,
+    warnGridIndivisible: `Jumlah papan ({n}) mesti boleh dibahagi sama rata dengan salinan setiap kad ({copies}).`,
+    warnNeedMoreImages: `Anda memerlukan {needed} imej unik untuk papan ini tetapi hanya ada {have}.`,
+    warnExtraImages: `Hanya {needed} imej pertama daripada {have} imej anda akan digunakan.`,
+    warnNoImages: `Tambah sekurang-kurangnya satu imej untuk bermula.`,
+    cardAltFace: `Muka kad`,
+    cardAltBack: `Belakang kad`,
+  },
+  ro: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek îți permite să creezi jocuri de memorie folosind propriile imagini.`,
+    secImages: `Imaginile cărților`,
+    secBoard: `Tablă`,
+    secBack: `Spatele cărții`,
+    secHud: `Bara de joc (ascunsă implicit)`,
+    secActions: `Acțiuni`,
+    dropzone: `Faceți clic sau plasați imagini aici. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Coloane`,
+    rows: `Rânduri`,
+    copies: `Copii per carte`,
+    fit: `Potrivire imagine`,
+    fitContain: `Potrivește (păstrează raportul)`,
+    fitCover: `Acoperă (decupează pentru umplere)`,
+    fitStretch: `Întinde (fără raport)`,
+    fitOriginal: `Dimensiune originală`,
+    uploadCustomBack: `Încarcă spate personalizat`,
+    removeCustomBack: `Elimină spatele personalizat`,
+    hudMoves: `Afișează contorul de mutări`,
+    hudTimer: `Afișează cronometrul`,
+    hudMatches: `Afișează perechile găsite`,
+    testPlay: `Joc de probă`,
+    download: `Descarcă jocul .html`,
+    clearCards:   `Șterge cărțile`,
+    confirmClear: `Eliminați toate imaginile cărților? Această acțiune nu poate fi anulată.`,
+    gameNamePlaceholder: `Numele jocului (opțional)`,
+    actionsHint: `Imaginile încărcate sunt păstrate doar cât timp această filă este deschisă. Descarcă fișierul .html al jocului pentru a le păstra permanent.`,
+    warnDupImages: `Notă: au fost detectate {n} imagini duplicate. Este permis, dar poate fi derutant în joc.`,
+    moves: `Mutări`,
+    time: `Timp`,
+    matches: `Perechi`,
+    newGame: `Joc nou`,
+    gallery: `Vezi galeria`,
+    editCards: `Editează cărțile`,
+    matchEachCard: `Potrivește {n} din fiecare carte.`,
+    warnGridIndivisible: `Totalul tablei ({n}) trebuie să fie divizibil cu numărul de copii per carte ({copies}).`,
+    warnNeedMoreImages: `Aveți nevoie de {needed} imagini unice pentru această tablă, dar aveți {have}.`,
+    warnExtraImages: `Vor fi folosite doar primele {needed} din cele {have} imagini ale dvs.`,
+    warnNoImages: `Adăugați cel puțin o imagine pentru a începe.`,
+    cardAltFace: `Fața cărții`,
+    cardAltBack: `Spatele cărții`,
+  },
+  el: {
+    appTitle: `Memory Peek`,
+    appDescription: `Το Memory Peek σας επιτρέπει να δημιουργείτε παιχνίδια μνήμης με τις δικές σας εικόνες.`,
+    secImages: `Εικόνες καρτών`,
+    secBoard: `Ταμπλό`,
+    secBack: `Πίσω όψη κάρτας`,
+    secHud: `Πίνακας παιχνιδιού (κρυφός από προεπιλογή)`,
+    secActions: `Ενέργειες`,
+    dropzone: `Κάντε κλικ ή αφήστε εικόνες εδώ. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Στήλες`,
+    rows: `Γραμμές`,
+    copies: `Αντίγραφα ανά κάρτα`,
+    fit: `Προσαρμογή εικόνας`,
+    fitContain: `Προσαρμογή (διατήρηση αναλογίας)`,
+    fitCover: `Κάλυψη (περικοπή για γέμισμα)`,
+    fitStretch: `Τέντωμα (χωρίς αναλογία)`,
+    fitOriginal: `Αρχικό μέγεθος`,
+    uploadCustomBack: `Μεταφόρτωση προσαρμοσμένης πίσω όψης`,
+    removeCustomBack: `Αφαίρεση προσαρμοσμένης πίσω όψης`,
+    hudMoves: `Εμφάνιση μετρητή κινήσεων`,
+    hudTimer: `Εμφάνιση χρονομέτρου`,
+    hudMatches: `Εμφάνιση ζευγαριών που βρέθηκαν`,
+    testPlay: `Δοκιμή`,
+    download: `Λήψη παιχνιδιού .html`,
+    clearCards:   `Εκκαθάριση καρτών`,
+    confirmClear: `Αφαίρεση όλων των εικόνων κάρτας; Η ενέργεια αυτή δεν μπορεί να αναιρεθεί.`,
+    gameNamePlaceholder: `Όνομα παιχνιδιού (προαιρετικό)`,
+    actionsHint: `Οι εικόνες που μεταφορτώνετε διατηρούνται μόνο όσο είναι ανοιχτή αυτή η καρτέλα. Κατεβάστε το αρχείο .html του παιχνιδιού για να τις κρατήσετε μόνιμα.`,
+    warnDupImages: `Σημείωση: εντοπίστηκαν {n} διπλές εικόνες. Επιτρέπεται, αλλά μπορεί να προκαλέσει σύγχυση στο παιχνίδι.`,
+    moves: `Κινήσεις`,
+    time: `Χρόνος`,
+    matches: `Ζευγάρια`,
+    newGame: `Νέο παιχνίδι`,
+    gallery: `Προβολή συλλογής`,
+    editCards: `Επεξεργασία καρτών`,
+    matchEachCard: `Ταιριάξτε {n} από κάθε κάρτα.`,
+    warnGridIndivisible: `Το σύνολο του ταμπλό ({n}) πρέπει να διαιρείται ακριβώς με τα αντίγραφα ανά κάρτα ({copies}).`,
+    warnNeedMoreImages: `Χρειάζεστε {needed} μοναδικές εικόνες για αυτό το ταμπλό, αλλά έχετε {have}.`,
+    warnExtraImages: `Θα χρησιμοποιηθούν μόνο οι πρώτες {needed} από τις {have} εικόνες σας.`,
+    warnNoImages: `Προσθέστε τουλάχιστον μία εικόνα για να ξεκινήσετε.`,
+    cardAltFace: `Μπροστινή όψη κάρτας`,
+    cardAltBack: `Πίσω όψη κάρτας`,
+  },
+  he: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek מאפשר לך ליצור משחקי זיכרון עם תמונות מותאמות אישית משלך.`,
+    secImages: `תמונות הקלפים`,
+    secBoard: `לוח`,
+    secBack: `גב הקלף`,
+    secHud: `סרגל מידע משחק (מוסתר כברירת מחדל)`,
+    secActions: `פעולות`,
+    dropzone: `לחצו או גררו תמונות לכאן. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `עמודות`,
+    rows: `שורות`,
+    copies: `עותקים לכל קלף`,
+    fit: `התאמת תמונה`,
+    fitContain: `התאמה (שמירה על יחס)`,
+    fitCover: `כיסוי (חיתוך למילוי)`,
+    fitStretch: `מתיחה (ללא יחס)`,
+    fitOriginal: `גודל מקורי`,
+    uploadCustomBack: `העלאת גב מותאם אישית`,
+    removeCustomBack: `הסרת גב מותאם אישית`,
+    hudMoves: `הצגת מונה צעדים`,
+    hudTimer: `הצגת שעון`,
+    hudMatches: `הצגת זוגות שנמצאו`,
+    testPlay: `משחק ניסיון`,
+    download: `הורדת המשחק .html`,
+    clearCards:   `נקה קלפים`,
+    confirmClear: `להסיר את כל תמונות הקלפים? לא ניתן לבטל פעולה זו.`,
+    gameNamePlaceholder: `שם המשחק (אופציונלי)`,
+    actionsHint: `תמונות שהועלו נשמרות רק כל עוד הלשונית פתוחה. הורידו את קובץ ה-.html של המשחק כדי לשמור אותן לתמיד.`,
+    warnDupImages: `שימו לב: זוהו {n} תמונות כפולות. הדבר מותר אך עלול לבלבל במהלך המשחק.`,
+    moves: `צעדים`,
+    time: `זמן`,
+    matches: `זוגות`,
+    newGame: `משחק חדש`,
+    gallery: `הצגת גלריה`,
+    editCards: `עריכת קלפים`,
+    matchEachCard: `התאימו {n} מכל קלף.`,
+    warnGridIndivisible: `סך הלוח ({n}) חייב להתחלק במספר העותקים לכל קלף ({copies}).`,
+    warnNeedMoreImages: `אתם צריכים {needed} תמונות ייחודיות ללוח הזה, אך יש לכם {have}.`,
+    warnExtraImages: `ייעשה שימוש רק ב-{needed} הראשונות מתוך {have} התמונות שלכם.`,
+    warnNoImages: `הוסיפו לפחות תמונה אחת כדי להתחיל.`,
+    cardAltFace: `פני הקלף`,
+    cardAltBack: `גב הקלף`,
+  },
+  sv: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek låter dig skapa minnesspel med dina egna bilder.`,
+    secImages: `Kortbilder`,
+    secBoard: `Spelplan`,
+    secBack: `Kortets baksida`,
+    secHud: `Spelpanel (dold som standard)`,
+    secActions: `Åtgärder`,
+    dropzone: `Klicka eller släpp bilder här. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Kolumner`,
+    rows: `Rader`,
+    copies: `Kopior per kort`,
+    fit: `Bildanpassning`,
+    fitContain: `Anpassa (behåll proportioner)`,
+    fitCover: `Täck (beskär för att fylla)`,
+    fitStretch: `Sträck (utan proportioner)`,
+    fitOriginal: `Originalstorlek`,
+    uploadCustomBack: `Ladda upp egen baksida`,
+    removeCustomBack: `Ta bort egen baksida`,
+    hudMoves: `Visa dragräknare`,
+    hudTimer: `Visa tidtagare`,
+    hudMatches: `Visa hittade par`,
+    testPlay: `Testa`,
+    download: `Ladda ner spelet .html`,
+    clearCards:   `Rensa kort`,
+    confirmClear: `Ta bort alla kortbilder? Detta kan inte ångras.`,
+    gameNamePlaceholder: `Spelnamn (valfritt)`,
+    actionsHint: `Uppladdade bilder sparas bara så länge den här fliken är öppen. Ladda ner spelets .html-fil för att behålla dem permanent.`,
+    warnDupImages: `Obs: {n} dubbletter av bilder hittades. Det är tillåtet men kan vara förvirrande i spelet.`,
+    moves: `Drag`,
+    time: `Tid`,
+    matches: `Par`,
+    newGame: `Nytt spel`,
+    gallery: `Visa galleri`,
+    editCards: `Redigera kort`,
+    matchEachCard: `Matcha {n} av varje kort.`,
+    warnGridIndivisible: `Spelplanens totala antal ({n}) måste vara jämnt delbart med kopior per kort ({copies}).`,
+    warnNeedMoreImages: `Du behöver {needed} unika bilder för den här spelplanen men har {have}.`,
+    warnExtraImages: `Endast de första {needed} av dina {have} bilder kommer att användas.`,
+    warnNoImages: `Lägg till minst en bild för att börja.`,
+    cardAltFace: `Kortets framsida`,
+    cardAltBack: `Kortets baksida`,
+  },
+  fil: {
+    appTitle: `Memory Peek`,
+    appDescription: `Hinahayaan ka ng Memory Peek na gumawa ng mga laro ng memorya gamit ang sarili mong mga larawan.`,
+    secImages: `Mga larawan ng baraha`,
+    secBoard: `Board`,
+    secBack: `Likod ng baraha`,
+    secHud: `Panel ng laro (nakatago bilang default)`,
+    secActions: `Mga aksyon`,
+    dropzone: `I-click o ihulog ang mga larawan dito. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Mga kolum`,
+    rows: `Mga hilera`,
+    copies: `Mga kopya bawat baraha`,
+    fit: `Pagkasya ng larawan`,
+    fitContain: `Kasya (panatilihin ang ratio)`,
+    fitCover: `Takpan (i-crop upang punan)`,
+    fitStretch: `Banatin (walang ratio)`,
+    fitOriginal: `Orihinal na sukat`,
+    uploadCustomBack: `Mag-upload ng custom na likod`,
+    removeCustomBack: `Alisin ang custom na likod`,
+    hudMoves: `Ipakita ang bilang ng kilos`,
+    hudTimer: `Ipakita ang timer`,
+    hudMatches: `Ipakita ang mga natuklasang pares`,
+    testPlay: `Subukan`,
+    download: `I-download ang laro .html`,
+    clearCards:   `Burahin ang mga card`,
+    confirmClear: `Burahin lahat ng larawan ng card? Hindi ito maibabalik.`,
+    gameNamePlaceholder: `Pangalan ng laro (opsyonal)`,
+    actionsHint: `Ang mga na-upload na larawan ay pinananatili lamang habang bukas ang tab na ito. I-download ang .html file ng laro upang panatilihin ang mga ito nang permanente.`,
+    warnDupImages: `Tandaan: may natuklasang {n} dobleng larawan. Pinapayagan ito ngunit maaaring nakakalito habang naglalaro.`,
+    moves: `Kilos`,
+    time: `Oras`,
+    matches: `Pares`,
+    newGame: `Bagong laro`,
+    gallery: `Tingnan ang gallery`,
+    editCards: `I-edit ang mga baraha`,
+    matchEachCard: `Itugma ang {n} sa bawat baraha.`,
+    warnGridIndivisible: `Ang kabuuang board ({n}) ay dapat hating-hati sa bilang ng kopya bawat baraha ({copies}).`,
+    warnNeedMoreImages: `Kailangan mo ng {needed} natatanging larawan para sa board na ito ngunit mayroon kang {have}.`,
+    warnExtraImages: `Ang unang {needed} lamang sa iyong {have} na larawan ang gagamitin.`,
+    warnNoImages: `Magdagdag ng kahit isang larawan upang magsimula.`,
+    cardAltFace: `Harap ng baraha`,
+    cardAltBack: `Likod ng baraha`,
+  },
+  ta: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek உங்கள் சொந்த படங்களைப் பயன்படுத்தி நினைவாற்றல் விளையாட்டுகளை உருவாக்க அனுமதிக்கிறது.`,
+    secImages: `அட்டை படங்கள்`,
+    secBoard: `பலகை`,
+    secBack: `அட்டையின் பின்புறம்`,
+    secHud: `விளையாட்டுத் தகவல் பட்டை (இயல்பாக மறைக்கப்பட்டது)`,
+    secActions: `செயல்கள்`,
+    dropzone: `கிளிக் செய்யவும் அல்லது படங்களை இங்கே விடவும். PNG, JPG, GIF, WebP, SVG.`,
+    cols: `நிரல்கள்`,
+    rows: `வரிசைகள்`,
+    copies: `ஒரு அட்டைக்கான பிரதிகள்`,
+    fit: `பட பொருத்தம்`,
+    fitContain: `பொருத்து (விகிதம் காப்போம்)`,
+    fitCover: `மூடு (நிரப்ப வெட்டு)`,
+    fitStretch: `நீட்டு (விகிதம் இல்லை)`,
+    fitOriginal: `அசல் அளவு`,
+    uploadCustomBack: `தனிப்பயன் பின்புறத்தை பதிவேற்று`,
+    removeCustomBack: `தனிப்பயன் பின்புறத்தை நீக்கு`,
+    hudMoves: `நகர்வு எண்ணிக்கையைக் காட்டு`,
+    hudTimer: `நேரக்கணக்கைக் காட்டு`,
+    hudMatches: `கண்டுபிடித்த ஜோடிகளைக் காட்டு`,
+    testPlay: `சோதனை விளையாட்டு`,
+    download: `விளையாட்டு .html ஐ பதிவிறக்கு`,
+    clearCards:   `அட்டைகளை அழி`,
+    confirmClear: `அனைத்து அட்டைப் படங்களையும் அகற்றவா? இதை மீட்க முடியாது.`,
+    gameNamePlaceholder: `விளையாட்டின் பெயர் (விருப்பம்)`,
+    actionsHint: `பதிவேற்றிய படங்கள் இந்த தாவல் திறந்திருக்கும் வரை மட்டுமே வைக்கப்படும். அவற்றை நிரந்தரமாக வைக்க விளையாட்டின் .html கோப்பை பதிவிறக்கவும்.`,
+    warnDupImages: `குறிப்பு: {n} நகல் படங்கள் கண்டறியப்பட்டன. அனுமதிக்கப்படுகிறது ஆனால் விளையாட்டில் குழப்பத்தை ஏற்படுத்தலாம்.`,
+    moves: `நகர்வுகள்`,
+    time: `நேரம்`,
+    matches: `ஜோடிகள்`,
+    newGame: `புதிய விளையாட்டு`,
+    gallery: `கேலரியைப் பார்`,
+    editCards: `அட்டைகளைத் திருத்து`,
+    matchEachCard: `ஒவ்வொரு அட்டையின் {n} ஐ பொருத்தவும்.`,
+    warnGridIndivisible: `பலகையின் மொத்தம் ({n}) ஒவ்வொரு அட்டையின் பிரதி எண்ணிக்கையால் ({copies}) சமமாகப் பிரிய வேண்டும்.`,
+    warnNeedMoreImages: `இந்த பலகைக்கு {needed} தனித்துவமான படங்கள் தேவை ஆனால் உங்களிடம் {have} உள்ளன.`,
+    warnExtraImages: `உங்கள் {have} படங்களில் முதல் {needed} மட்டுமே பயன்படுத்தப்படும்.`,
+    warnNoImages: `தொடங்க குறைந்தது ஒரு படத்தைச் சேர்க்கவும்.`,
+    cardAltFace: `அட்டையின் முன்புறம்`,
+    cardAltBack: `அட்டையின் பின்புறம்`,
+  },
+  hu: {
+    appTitle: `Memory Peek`,
+    appDescription: `A Memory Peek lehetővé teszi, hogy saját képeiddel készíts memóriajátékokat.`,
+    secImages: `Kártyák képei`,
+    secBoard: `Tábla`,
+    secBack: `Kártya hátoldala`,
+    secHud: `Játékpanel (alapértelmezetten rejtett)`,
+    secActions: `Műveletek`,
+    dropzone: `Kattints vagy húzz ide képeket. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Oszlopok`,
+    rows: `Sorok`,
+    copies: `Kártyánkénti példányszám`,
+    fit: `Képillesztés`,
+    fitContain: `Illesztés (arány megtartása)`,
+    fitCover: `Lefedés (kitöltéshez vágás)`,
+    fitStretch: `Nyújtás (arány nélkül)`,
+    fitOriginal: `Eredeti méret`,
+    uploadCustomBack: `Egyéni hátoldal feltöltése`,
+    removeCustomBack: `Egyéni hátoldal eltávolítása`,
+    hudMoves: `Lépésszámláló mutatása`,
+    hudTimer: `Időmérő mutatása`,
+    hudMatches: `Megtalált párok mutatása`,
+    testPlay: `Próbajáték`,
+    download: `Játék letöltése .html`,
+    clearCards:   `Kártyák törlése`,
+    confirmClear: `Eltávolítja az összes kártyaképet? Ez nem vonható vissza.`,
+    gameNamePlaceholder: `Játék neve (nem kötelező)`,
+    actionsHint: `A feltöltött képeket csak addig őrizzük meg, amíg ez a fül nyitva van. Töltsd le a játék .html fájlját, hogy megtartsd őket véglegesen.`,
+    warnDupImages: `Megjegyzés: {n} ismétlődő képet észleltünk. Ez engedélyezett, de zavaró lehet játék közben.`,
+    moves: `Lépések`,
+    time: `Idő`,
+    matches: `Párok`,
+    newGame: `Új játék`,
+    gallery: `Galéria megtekintése`,
+    editCards: `Kártyák szerkesztése`,
+    matchEachCard: `Találj meg {n} darabot mindegyik kártyából.`,
+    warnGridIndivisible: `A tábla összes mezője ({n}) maradék nélkül osztható kell legyen a kártyánkénti példányszámmal ({copies}).`,
+    warnNeedMoreImages: `Ehhez a táblához {needed} egyedi kép szükséges, de csak {have} van.`,
+    warnExtraImages: `A {have} képedből csak az első {needed} kerül felhasználásra.`,
+    warnNoImages: `A kezdéshez adj hozzá legalább egy képet.`,
+    cardAltFace: `Kártya előlapja`,
+    cardAltBack: `Kártya hátlapja`,
+  },
+  da: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek lader dig oprette hukommelsesspil med dine egne billeder.`,
+    secImages: `Kortbilleder`,
+    secBoard: `Spilleplade`,
+    secBack: `Kortets bagside`,
+    secHud: `Spilpanel (skjult som standard)`,
+    secActions: `Handlinger`,
+    dropzone: `Klik eller slip billeder her. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Kolonner`,
+    rows: `Rækker`,
+    copies: `Kopier pr. kort`,
+    fit: `Billedtilpasning`,
+    fitContain: `Tilpas (bevar forhold)`,
+    fitCover: `Dæk (beskær for at fylde)`,
+    fitStretch: `Stræk (uden forhold)`,
+    fitOriginal: `Original størrelse`,
+    uploadCustomBack: `Upload tilpasset bagside`,
+    removeCustomBack: `Fjern tilpasset bagside`,
+    hudMoves: `Vis trækstæller`,
+    hudTimer: `Vis tidstager`,
+    hudMatches: `Vis fundne par`,
+    testPlay: `Test`,
+    download: `Download spil .html`,
+    clearCards:   `Ryd kort`,
+    confirmClear: `Fjern alle kortbilleder? Dette kan ikke fortrydes.`,
+    gameNamePlaceholder: `Spilnavn (valgfrit)`,
+    actionsHint: `Uploadede billeder gemmes kun, så længe denne fane er åben. Download spillets .html-fil for at gemme dem permanent.`,
+    warnDupImages: `Bemærk: {n} dubletbilleder fundet. Det er tilladt, men kan være forvirrende under spil.`,
+    moves: `Træk`,
+    time: `Tid`,
+    matches: `Par`,
+    newGame: `Nyt spil`,
+    gallery: `Se galleri`,
+    editCards: `Rediger kort`,
+    matchEachCard: `Match {n} af hvert kort.`,
+    warnGridIndivisible: `Spillepladens samlede antal ({n}) skal være delelig med kopier pr. kort ({copies}).`,
+    warnNeedMoreImages: `Du har brug for {needed} unikke billeder til denne spilleplade, men har {have}.`,
+    warnExtraImages: `Kun de første {needed} af dine {have} billeder vil blive brugt.`,
+    warnNoImages: `Tilføj mindst ét billede for at starte.`,
+    cardAltFace: `Kortets forside`,
+    cardAltBack: `Kortets bagside`,
+  },
+  fi: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peekin avulla voit luoda muistipelejä omilla kuvillasi.`,
+    secImages: `Korttien kuvat`,
+    secBoard: `Pelilauta`,
+    secBack: `Kortin tausta`,
+    secHud: `Pelipaneeli (oletuksena piilotettu)`,
+    secActions: `Toiminnot`,
+    dropzone: `Napsauta tai pudota kuvat tähän. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Sarakkeet`,
+    rows: `Rivit`,
+    copies: `Kappaletta kutakin korttia`,
+    fit: `Kuvan sovitus`,
+    fitContain: `Sovita (säilytä kuvasuhde)`,
+    fitCover: `Peitä (rajaa täyttääksesi)`,
+    fitStretch: `Venytä (ei kuvasuhdetta)`,
+    fitOriginal: `Alkuperäinen koko`,
+    uploadCustomBack: `Lataa mukautettu tausta`,
+    removeCustomBack: `Poista mukautettu tausta`,
+    hudMoves: `Näytä siirtolaskuri`,
+    hudTimer: `Näytä ajastin`,
+    hudMatches: `Näytä löydetyt parit`,
+    testPlay: `Kokeile`,
+    download: `Lataa peli .html`,
+    clearCards:   `Tyhjennä kortit`,
+    confirmClear: `Poistetaanko kaikki korttikuvat? Tätä ei voi peruuttaa.`,
+    gameNamePlaceholder: `Pelin nimi (valinnainen)`,
+    actionsHint: `Ladatut kuvat säilyvät vain niin kauan kuin tämä välilehti on auki. Lataa pelin .html-tiedosto säilyttääksesi ne pysyvästi.`,
+    warnDupImages: `Huomio: havaittu {n} kaksoiskuvaa. Sallittu, mutta voi olla hämmentävää pelatessa.`,
+    moves: `Siirrot`,
+    time: `Aika`,
+    matches: `Parit`,
+    newGame: `Uusi peli`,
+    gallery: `Näytä galleria`,
+    editCards: `Muokkaa kortteja`,
+    matchEachCard: `Etsi {n} kappaletta jokaista korttia.`,
+    warnGridIndivisible: `Pelilaudan kokonaismäärän ({n}) on oltava jaollinen korttia kohden olevien kappaleiden ({copies}) määrällä.`,
+    warnNeedMoreImages: `Tarvitset {needed} ainutlaatuista kuvaa tähän pelilautaan, mutta sinulla on {have}.`,
+    warnExtraImages: `Vain ensimmäiset {needed} kuvaa kaikista {have} kuvastasi käytetään.`,
+    warnNoImages: `Lisää vähintään yksi kuva aloittaaksesi.`,
+    cardAltFace: `Kortin etupuoli`,
+    cardAltBack: `Kortin tausta`,
+  },
+  nb: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek lar deg lage hukommelsesspill med dine egne bilder.`,
+    secImages: `Kortbilder`,
+    secBoard: `Spillebrett`,
+    secBack: `Baksiden av kortet`,
+    secHud: `Spillpanel (skjult som standard)`,
+    secActions: `Handlinger`,
+    dropzone: `Klikk eller slipp bilder her. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Kolonner`,
+    rows: `Rader`,
+    copies: `Kopier per kort`,
+    fit: `Bildetilpasning`,
+    fitContain: `Tilpass (behold forhold)`,
+    fitCover: `Dekk (beskjær for å fylle)`,
+    fitStretch: `Strekk (uten forhold)`,
+    fitOriginal: `Originalstørrelse`,
+    uploadCustomBack: `Last opp egendefinert bakside`,
+    removeCustomBack: `Fjern egendefinert bakside`,
+    hudMoves: `Vis trekkteller`,
+    hudTimer: `Vis tidtaker`,
+    hudMatches: `Vis funnede par`,
+    testPlay: `Test`,
+    download: `Last ned spill .html`,
+    clearCards:   `Tøm kort`,
+    confirmClear: `Fjerne alle kortbilder? Dette kan ikke angres.`,
+    gameNamePlaceholder: `Spillnavn (valgfritt)`,
+    actionsHint: `Opplastede bilder beholdes bare så lenge denne fanen er åpen. Last ned spillets .html-fil for å beholde dem permanent.`,
+    warnDupImages: `Merk: {n} duplikatbilder oppdaget. Det er tillatt, men kan være forvirrende under spilling.`,
+    moves: `Trekk`,
+    time: `Tid`,
+    matches: `Par`,
+    newGame: `Nytt spill`,
+    gallery: `Se galleri`,
+    editCards: `Rediger kort`,
+    matchEachCard: `Match {n} av hvert kort.`,
+    warnGridIndivisible: `Det totale antallet ruter på brettet ({n}) må være delelig med kopier per kort ({copies}).`,
+    warnNeedMoreImages: `Du trenger {needed} unike bilder til dette brettet, men har {have}.`,
+    warnExtraImages: `Kun de første {needed} av dine {have} bilder vil bli brukt.`,
+    warnNoImages: `Legg til minst ett bilde for å begynne.`,
+    cardAltFace: `Forsiden av kortet`,
+    cardAltBack: `Baksiden av kortet`,
+  },
+  sk: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek vám umožňuje vytvárať pamäťové hry s vlastnými obrázkami.`,
+    secImages: `Obrázky kariet`,
+    secBoard: `Hracia plocha`,
+    secBack: `Rub karty`,
+    secHud: `Herný panel (predvolene skrytý)`,
+    secActions: `Akcie`,
+    dropzone: `Kliknite alebo sem pretiahnite obrázky. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Stĺpce`,
+    rows: `Riadky`,
+    copies: `Kópie na kartu`,
+    fit: `Prispôsobenie obrázka`,
+    fitContain: `Prispôsobiť (zachovať pomer)`,
+    fitCover: `Vyplniť (orezať)`,
+    fitStretch: `Roztiahnuť (bez pomeru)`,
+    fitOriginal: `Pôvodná veľkosť`,
+    uploadCustomBack: `Nahrať vlastný rub`,
+    removeCustomBack: `Odstrániť vlastný rub`,
+    hudMoves: `Zobraziť počítadlo ťahov`,
+    hudTimer: `Zobraziť časovač`,
+    hudMatches: `Zobraziť nájdené dvojice`,
+    testPlay: `Vyskúšať`,
+    download: `Stiahnuť hru .html`,
+    clearCards:   `Vymazať karty`,
+    confirmClear: `Odstrániť všetky obrázky kariet? Toto sa nedá vrátiť späť.`,
+    gameNamePlaceholder: `Názov hry (voliteľné)`,
+    actionsHint: `Nahraté obrázky sa uchovávajú iba kým je táto karta otvorená. Stiahnite si súbor .html hry, aby ste ich zachovali natrvalo.`,
+    warnDupImages: `Poznámka: zistené {n} duplicitné obrázky. Je to povolené, ale počas hry to môže byť mätúce.`,
+    moves: `Ťahy`,
+    time: `Čas`,
+    matches: `Dvojice`,
+    newGame: `Nová hra`,
+    gallery: `Zobraziť galériu`,
+    editCards: `Upraviť karty`,
+    matchEachCard: `Spárujte {n} z každej karty.`,
+    warnGridIndivisible: `Celkový počet polí ({n}) musí byť deliteľný počtom kópií na kartu ({copies}).`,
+    warnNeedMoreImages: `Pre túto plochu potrebujete {needed} jedinečných obrázkov, ale máte {have}.`,
+    warnExtraImages: `Použije sa len prvých {needed} z vašich {have} obrázkov.`,
+    warnNoImages: `Pridajte aspoň jeden obrázok, aby ste mohli začať.`,
+    cardAltFace: `Líce karty`,
+    cardAltBack: `Rub karty`,
+  },
+  bg: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek ви позволява да създавате игри за памет със собствените си изображения.`,
+    secImages: `Изображения на картите`,
+    secBoard: `Игрално поле`,
+    secBack: `Гръб на картата`,
+    secHud: `Игрален панел (скрит по подразбиране)`,
+    secActions: `Действия`,
+    dropzone: `Щракнете или пуснете изображения тук. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Колони`,
+    rows: `Редове`,
+    copies: `Копия на карта`,
+    fit: `Побиране на изображението`,
+    fitContain: `Побери (запази съотношението)`,
+    fitCover: `Покрий (изрежи за запълване)`,
+    fitStretch: `Разтегни (без съотношение)`,
+    fitOriginal: `Оригинален размер`,
+    uploadCustomBack: `Качи персонализиран гръб`,
+    removeCustomBack: `Премахни персонализирания гръб`,
+    hudMoves: `Показвай брояча на ходовете`,
+    hudTimer: `Показвай таймера`,
+    hudMatches: `Показвай намерените двойки`,
+    testPlay: `Пробна игра`,
+    download: `Изтегли играта .html`,
+    clearCards:   `Изчистване на картите`,
+    confirmClear: `Да се премахнат всички изображения на карти? Това действие не може да бъде отменено.`,
+    gameNamePlaceholder: `Име на играта (по избор)`,
+    actionsHint: `Качените изображения се запазват само докато този раздел е отворен. Изтеглете .html файла на играта, за да ги запазите завинаги.`,
+    warnDupImages: `Бележка: открити са {n} дублирани изображения. Това е позволено, но може да обърква по време на игра.`,
+    moves: `Ходове`,
+    time: `Време`,
+    matches: `Двойки`,
+    newGame: `Нова игра`,
+    gallery: `Виж галерията`,
+    editCards: `Редактирай картите`,
+    matchEachCard: `Намерете по {n} от всяка карта.`,
+    warnGridIndivisible: `Общият брой клетки ({n}) трябва да се дели на копията на карта ({copies}).`,
+    warnNeedMoreImages: `Нуждаете се от {needed} уникални изображения за това поле, но имате {have}.`,
+    warnExtraImages: `Ще се използват само първите {needed} от вашите {have} изображения.`,
+    warnNoImages: `Добавете поне едно изображение, за да започнете.`,
+    cardAltFace: `Лице на картата`,
+    cardAltBack: `Гръб на картата`,
+  },
+  sr: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek vam omogućava da pravite memorijske igre sa sopstvenim slikama.`,
+    secImages: `Слике карата`,
+    secBoard: `Табла`,
+    secBack: `Полеђина карте`,
+    secHud: `Панел игре (подразумевано сакривен)`,
+    secActions: `Радње`,
+    dropzone: `Кликните или превуците слике овде. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Колоне`,
+    rows: `Редови`,
+    copies: `Копија по карти`,
+    fit: `Уклапање слике`,
+    fitContain: `Уклопи (задржи однос)`,
+    fitCover: `Покриј (исеци да попуни)`,
+    fitStretch: `Развуци (без односа)`,
+    fitOriginal: `Изворна величина`,
+    uploadCustomBack: `Отпреми прилагођену полеђину`,
+    removeCustomBack: `Уклони прилагођену полеђину`,
+    hudMoves: `Прикажи бројач потеза`,
+    hudTimer: `Прикажи тајмер`,
+    hudMatches: `Прикажи пронађене парове`,
+    testPlay: `Пробна игра`,
+    download: `Преузми игру .html`,
+    clearCards:   `Обриши карте`,
+    confirmClear: `Уклонити све слике карата? Ово се не може опозвати.`,
+    gameNamePlaceholder: `Назив игре (опционално)`,
+    actionsHint: `Отпремљене слике се чувају само док је овај језичак отворен. Преузмите .html датотеку игре да их трајно сачувате.`,
+    warnDupImages: `Напомена: откривено је {n} дуплираних слика. То је дозвољено, али може збунити током игре.`,
+    moves: `Потези`,
+    time: `Време`,
+    matches: `Парови`,
+    newGame: `Нова игра`,
+    gallery: `Прикажи галерију`,
+    editCards: `Уреди карте`,
+    matchEachCard: `Упарите {n} од сваке карте.`,
+    warnGridIndivisible: `Укупан број поља ({n}) мора бити дељив бројем копија по карти ({copies}).`,
+    warnNeedMoreImages: `За ову таблу потребно је {needed} јединствених слика, а имате {have}.`,
+    warnExtraImages: `Биће коришћено само првих {needed} од ваших {have} слика.`,
+    warnNoImages: `Додајте бар једну слику да почнете.`,
+    cardAltFace: `Лице карте`,
+    cardAltBack: `Полеђина карте`,
+  },
+  hr: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek vam omogućuje stvaranje memorijskih igara s vlastitim slikama.`,
+    secImages: `Slike karata`,
+    secBoard: `Ploča`,
+    secBack: `Poleđina karte`,
+    secHud: `Igrački panel (zadano skriven)`,
+    secActions: `Radnje`,
+    dropzone: `Kliknite ili ovdje ispustite slike. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Stupci`,
+    rows: `Redovi`,
+    copies: `Kopije po karti`,
+    fit: `Prilagodba slike`,
+    fitContain: `Prilagodi (zadrži omjer)`,
+    fitCover: `Pokrij (izreži za ispunu)`,
+    fitStretch: `Rastegni (bez omjera)`,
+    fitOriginal: `Izvorna veličina`,
+    uploadCustomBack: `Učitaj prilagođenu poleđinu`,
+    removeCustomBack: `Ukloni prilagođenu poleđinu`,
+    hudMoves: `Prikaži brojač poteza`,
+    hudTimer: `Prikaži štopericu`,
+    hudMatches: `Prikaži pronađene parove`,
+    testPlay: `Probna igra`,
+    download: `Preuzmi igru .html`,
+    clearCards:   `Očisti kartice`,
+    confirmClear: `Ukloniti sve slike kartica? Ovo se ne može poništiti.`,
+    gameNamePlaceholder: `Naziv igre (neobavezno)`,
+    actionsHint: `Učitane slike čuvaju se samo dok je ova kartica otvorena. Preuzmite .html datoteku igre kako biste ih trajno sačuvali.`,
+    warnDupImages: `Napomena: pronađeno je {n} dupliciranih slika. Dozvoljeno je, ali može zbuniti tijekom igre.`,
+    moves: `Potezi`,
+    time: `Vrijeme`,
+    matches: `Parovi`,
+    newGame: `Nova igra`,
+    gallery: `Pogledaj galeriju`,
+    editCards: `Uredi karte`,
+    matchEachCard: `Uparite {n} od svake karte.`,
+    warnGridIndivisible: `Ukupan broj polja ({n}) mora biti djeljiv brojem kopija po karti ({copies}).`,
+    warnNeedMoreImages: `Za ovu ploču trebate {needed} jedinstvenih slika, a imate {have}.`,
+    warnExtraImages: `Koristit će se samo prvih {needed} od vaših {have} slika.`,
+    warnNoImages: `Dodajte barem jednu sliku za početak.`,
+    cardAltFace: `Lice karte`,
+    cardAltBack: `Poleđina karte`,
+  },
+  sl: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek vam omogoča ustvarjanje spominskih iger z lastnimi slikami.`,
+    secImages: `Slike kart`,
+    secBoard: `Igralna plošča`,
+    secBack: `Hrbtna stran karte`,
+    secHud: `Igralna plošča informacij (privzeto skrita)`,
+    secActions: `Dejanja`,
+    dropzone: `Kliknite ali sem spustite slike. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Stolpci`,
+    rows: `Vrstice`,
+    copies: `Kopije na karto`,
+    fit: `Prilagoditev slike`,
+    fitContain: `Prilagodi (ohrani razmerje)`,
+    fitCover: `Prekrij (poreži za zapolnitev)`,
+    fitStretch: `Raztegni (brez razmerja)`,
+    fitOriginal: `Izvirna velikost`,
+    uploadCustomBack: `Naloži poljubno hrbtno stran`,
+    removeCustomBack: `Odstrani poljubno hrbtno stran`,
+    hudMoves: `Prikaži števec potez`,
+    hudTimer: `Prikaži časovnik`,
+    hudMatches: `Prikaži najdene pare`,
+    testPlay: `Preizkusi igro`,
+    download: `Prenesi igro .html`,
+    clearCards:   `Počisti kartice`,
+    confirmClear: `Odstrani vse slike kartic? Tega ni mogoče razveljaviti.`,
+    gameNamePlaceholder: `Ime igre (neobvezno)`,
+    actionsHint: `Naložene slike se hranijo le, dokler je ta zavihek odprt. Prenesite .html datoteko igre, da jih trajno ohranite.`,
+    warnDupImages: `Opomba: zaznano je {n} podvojenih slik. Dovoljeno je, vendar lahko med igro zmede.`,
+    moves: `Poteze`,
+    time: `Čas`,
+    matches: `Pari`,
+    newGame: `Nova igra`,
+    gallery: `Prikaži galerijo`,
+    editCards: `Uredi karte`,
+    matchEachCard: `Združite {n} od vsake karte.`,
+    warnGridIndivisible: `Skupno število polj ({n}) mora biti deljivo s številom kopij na karto ({copies}).`,
+    warnNeedMoreImages: `Za to ploščo potrebujete {needed} edinstvenih slik, imate pa jih {have}.`,
+    warnExtraImages: `Uporabljenih bo le prvih {needed} od vaših {have} slik.`,
+    warnNoImages: `Dodajte vsaj eno sliko za začetek.`,
+    cardAltFace: `Sprednja stran karte`,
+    cardAltBack: `Hrbtna stran karte`,
+  },
+  ca: {
+    appTitle: `Memory Peek`,
+    appDescription: `Memory Peek et permet crear jocs de memòria amb les teves pròpies imatges.`,
+    secImages: `Imatges de les cartes`,
+    secBoard: `Tauler`,
+    secBack: `Revers de les cartes`,
+    secHud: `Panell de joc (ocult per defecte)`,
+    secActions: `Accions`,
+    dropzone: `Fes clic o deixa anar imatges aquí. PNG, JPG, GIF, WebP, SVG.`,
+    cols: `Columnes`,
+    rows: `Files`,
+    copies: `Còpies per carta`,
+    fit: `Ajust de la imatge`,
+    fitContain: `Ajustar (conservar proporció)`,
+    fitCover: `Cobrir (retallar per omplir)`,
+    fitStretch: `Estirar (sense proporció)`,
+    fitOriginal: `Mida original`,
+    uploadCustomBack: `Pujar revers personalitzat`,
+    removeCustomBack: `Eliminar revers personalitzat`,
+    hudMoves: `Mostrar comptador de moviments`,
+    hudTimer: `Mostrar cronòmetre`,
+    hudMatches: `Mostrar parelles trobades`,
+    testPlay: `Provar`,
+    download: `Baixar joc .html`,
+    clearCards:   `Esborra les cartes`,
+    confirmClear: `Eliminar totes les imatges de cartes? Aquesta acció no es pot desfer.`,
+    gameNamePlaceholder: `Nom del joc (opcional)`,
+    actionsHint: `Les imatges pujades es conserven només mentre aquesta pestanya estigui oberta. Baixa el fitxer .html del joc per conservar-les de manera permanent.`,
+    warnDupImages: `Avís: s'han detectat {n} imatges duplicades. És permès però pot resultar confús durant el joc.`,
+    moves: `Moviments`,
+    time: `Temps`,
+    matches: `Parelles`,
+    newGame: `Partida nova`,
+    gallery: `Veure galeria`,
+    editCards: `Editar cartes`,
+    matchEachCard: `Aparella {n} de cada carta.`,
+    warnGridIndivisible: `El total del tauler ({n}) ha de ser divisible per les còpies per carta ({copies}).`,
+    warnNeedMoreImages: `Necessites {needed} imatges úniques per a aquest tauler però en tens {have}.`,
+    warnExtraImages: `Només s'utilitzaran les primeres {needed} de les teves {have} imatges.`,
+    warnNoImages: `Afegeix almenys una imatge per començar.`,
+    cardAltFace: `Anvers de la carta`,
+    cardAltBack: `Revers de la carta`,
+  }
+};
+
+/* Built-in card backsides, generated as inline SVG strings. They render as
+   data URIs both in the editor preview and inside the rendered cards. Adding
+   another design = push another entry. */
+const BUILTIN_BACKSIDES = (() => {
+  const wrap = (inner) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice">${inner}</svg>`;
+  const list = [
+    {
+      id: 'stripes',
+      name: 'Stripes',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#2f5cd9"/>
+        <g stroke="#ffffff" stroke-width="6" opacity="0.35">
+          <line x1="-20" y1="20"  x2="120" y2="-20"/>
+          <line x1="-20" y1="50"  x2="120" y2="10"/>
+          <line x1="-20" y1="80"  x2="120" y2="40"/>
+          <line x1="-20" y1="110" x2="120" y2="70"/>
+          <line x1="-20" y1="140" x2="120" y2="100"/>
+        </g>`),
+    },
+    {
+      id: 'dots',
+      name: 'Dots',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#7c3aed"/>
+        <g fill="#ffffff" opacity="0.5">
+          ${[12,32,52,72,92].map(y => [12,32,52,72,92].map((x,i) =>
+            `<circle cx="${x + (Math.floor(y/20)%2?10:0)}" cy="${y}" r="5"/>`).join('')).join('')}
+        </g>`),
+    },
+    {
+      id: 'question',
+      name: 'Question',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#0f766e"/>
+        <text x="50" y="72" text-anchor="middle" font-size="76" font-family="serif" font-weight="700" fill="#ffffff">?</text>`),
+    },
+    {
+      id: 'stars',
+      name: 'Stars',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#b91c1c"/>
+        <g fill="#ffffff" opacity="0.7">
+          ${[[20,20],[50,30],[80,18],[30,55],[70,55],[20,82],[55,80],[85,80]].map(([x,y]) =>
+            `<polygon points="${[0,-7,2,-2,7,-2,3,1,5,7,0,3,-5,7,-3,1,-7,-2,-2,-2].map((n,i)=>i%2?y+n:x+n).join(',')}"/>`).join('')}
+        </g>`),
+    },
+    {
+      id: 'chevrons',
+      name: 'Chevrons',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#1f2937"/>
+        <g stroke="#fbbf24" stroke-width="4" fill="none" opacity="0.85">
+          <polyline points="0,20 50,40 100,20"/>
+          <polyline points="0,50 50,70 100,50"/>
+          <polyline points="0,80 50,100 100,80"/>
+        </g>`),
+    },
+    {
+      id: 'concentric',
+      name: 'Concentric',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#0ea5e9"/>
+        <g fill="none" stroke="#ffffff" stroke-width="3" opacity="0.7">
+          <circle cx="50" cy="50" r="42"/>
+          <circle cx="50" cy="50" r="32"/>
+          <circle cx="50" cy="50" r="22"/>
+          <circle cx="50" cy="50" r="12"/>
+        </g>`),
+    },
+    {
+      id: 'diamonds',
+      name: 'Diamonds',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#10b981"/>
+        <g fill="#ffffff" opacity="0.6">
+          ${[10,30,50,70,90].map(y => [10,30,50,70,90].map(x =>
+            `<polygon points="${x},${y-7} ${x+7},${y} ${x},${y+7} ${x-7},${y}"/>`).join('')).join('')}
+        </g>`),
+    },
+    {
+      id: 'waves',
+      name: 'Waves',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#06b6d4"/>
+        <g stroke="#ffffff" stroke-width="3" fill="none" opacity="0.75">
+          <path d="M0 20 Q 12 8 25 20 T 50 20 T 75 20 T 100 20"/>
+          <path d="M0 40 Q 12 28 25 40 T 50 40 T 75 40 T 100 40"/>
+          <path d="M0 60 Q 12 48 25 60 T 50 60 T 75 60 T 100 60"/>
+          <path d="M0 80 Q 12 68 25 80 T 50 80 T 75 80 T 100 80"/>
+        </g>`),
+    },
+    {
+      id: 'crosses',
+      name: 'Crosses',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#f97316"/>
+        <g stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.8">
+          ${[15,38,61,84].map(y => [15,38,61,84].map(x =>
+            `<line x1="${x-6}" y1="${y}" x2="${x+6}" y2="${y}"/><line x1="${x}" y1="${y-6}" x2="${x}" y2="${y+6}"/>`).join('')).join('')}
+        </g>`),
+    },
+    {
+      id: 'triangles',
+      name: 'Triangles',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#8b5cf6"/>
+        <g fill="#ffffff" opacity="0.55">
+          <polygon points="12,28 28,4 44,28"/>
+          <polygon points="56,28 72,4 88,28"/>
+          <polygon points="0,60 16,36 32,60"/>
+          <polygon points="36,60 52,36 68,60"/>
+          <polygon points="72,60 88,36 104,60"/>
+          <polygon points="12,92 28,68 44,92"/>
+          <polygon points="56,92 72,68 88,92"/>
+        </g>`),
+    },
+    {
+      id: 'bricks',
+      name: 'Bricks',
+      svg: wrap(`
+        <rect width="100" height="100" fill="#b45309"/>
+        <g fill="none" stroke="#ffffff" stroke-width="2" opacity="0.75">
+          <!-- Two row-styles offset by half a brick. -->
+          ${[0,40,80].map(y =>
+            `<rect x="0"  y="${y}" width="25" height="20"/>
+             <rect x="25" y="${y}" width="25" height="20"/>
+             <rect x="50" y="${y}" width="25" height="20"/>
+             <rect x="75" y="${y}" width="25" height="20"/>`).join('')}
+          ${[20,60].map(y =>
+            `<rect x="-12" y="${y}" width="25" height="20"/>
+             <rect x="13"  y="${y}" width="25" height="20"/>
+             <rect x="38"  y="${y}" width="25" height="20"/>
+             <rect x="63"  y="${y}" width="25" height="20"/>
+             <rect x="88"  y="${y}" width="25" height="20"/>`).join('')}
+        </g>`),
+    },
+  ];
+  // Pre-encode as data URI for easy use.
+  return list.map(b => ({
+    ...b,
+    dataUri: 'data:image/svg+xml;utf8,' + encodeURIComponent(b.svg),
+  }));
+})();
+
+/* Eight default card faces — simple geometric shapes on white backgrounds with
+   high-contrast saturated fills. Seeded into a fresh editor so users see a
+   playable example immediately, can hit Test Play right away, and have a
+   reference for what their own uploads should look like. Clear Cards wipes
+   them; uploading just appends to the list. */
+const DEFAULT_CARD_IMAGES = (() => {
+  const wrap = (inner) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#ffffff"/>${inner}</svg>`;
+  const shapes = [
+    { name: 'Circle',   svg: '<circle cx="50" cy="50" r="32" fill="#e63946"/>' },
+    { name: 'Square',   svg: '<rect x="20" y="20" width="60" height="60" fill="#1d4ed8"/>' },
+    { name: 'Triangle', svg: '<polygon points="50,18 84,76 16,76" fill="#16a34a"/>' },
+    { name: 'Diamond',  svg: '<polygon points="50,15 85,50 50,85 15,50" fill="#f59e0b"/>' },
+    { name: 'Star',     svg: '<polygon points="50,12 59.5,38 87,38 65,54 73,82 50,66 27,82 35,54 13,38 40.5,38" fill="#facc15"/>' },
+    { name: 'Hexagon',  svg: '<polygon points="30,20 70,20 90,50 70,80 30,80 10,50" fill="#9333ea"/>' },
+    { name: 'Plus',     svg: '<rect x="42" y="15" width="16" height="70" fill="#ec4899"/><rect x="15" y="42" width="70" height="16" fill="#ec4899"/>' },
+    { name: 'Heart',    svg: '<path d="M50 82 C 25 62 18 42 28 30 C 38 18 50 28 50 38 C 50 28 62 18 72 30 C 82 42 75 62 50 82 Z" fill="#0ea5e9"/>' },
+  ];
+  return shapes.map((s, i) => ({
+    id: 'default_' + s.name.toLowerCase(),
+    name: s.name,
+    dataUri: 'data:image/svg+xml;utf8,' + encodeURIComponent(wrap(s.svg)),
+  }));
+})();
+
+/* ---------------------------------------------------------------------------
+   Editor state. This is the single source of truth for the editor; UI is
+   re-rendered from it. We never read board settings off the DOM during a
+   build/download — only off this object.
+   --------------------------------------------------------------------------- */
+const state = {
+  images: [],          // [{ id, name, dataUri }]
+  cols: 4,
+  rows: 4,
+  copies: 2,
+  fit: 'contain',
+  backsideId: 'stripes',    // built-in id, or 'custom'
+  customBackside: null,     // data URI when backsideId === 'custom'
+  hud: { moves: false, timer: false, matches: false },
+  gameName: '',            // optional label prepended to "Memory Peek" in title + h1
+  lang: 'en',
+};
+
+/* Game runtime state — built fresh in startGame()/resetGame(). */
+let game = null;
+let resolveTimer = null;     // pending flip-back timeout id
+let elapsedTimer = null;     // 1s tick id
+let startedAt = 0;
+// True while a Test-Play-pushed history entry is on top of the stack. Used
+// so the browser Back button and the Edit Cards button take the same path
+// and so we don't accidentally treat unrelated popstates as our own.
+let testPlayHistoryPushed = false;
+
+/* Persistence intentionally removed: uploaded images live only in this tab.
+   The Actions section now tells the user to download the standalone .html
+   file to keep their work. saveStateSoon() stays as a no-op so call sites
+   throughout the editor remain semantically intact (each is a hook for any
+   future, non-image persistence we may want — e.g. lang preferences in
+   localStorage, which is wired separately). */
+function saveStateSoon() { /* no-op by design */ }
+
+/* ---------------------------------------------------------------------------
+   Localization
+   --------------------------------------------------------------------------- */
+function t(key, vars) {
+  const dict = I18N[state.lang] || I18N.en;
+  let s = dict[key] != null ? dict[key] : I18N.en[key];
+  if (s == null) return key;
+  if (vars) for (const k in vars) s = s.replace(new RegExp('\\{' + k + '\\}', 'g'), vars[k]);
+  return s;
+}
+
+/* Pick the initial language: prefer a saved value, then browser language if
+   supported, else English. */
+function pickInitialLang() {
+  const saved = localStorage.getItem(LS_LANG);
+  if (saved && SUPPORTED_LANGS.has(saved)) return saved;
+  const cands = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || 'en']);
+  for (const c of cands) {
+    if (!c) continue;
+    if (SUPPORTED_LANGS.has(c)) return c;
+    const base = c.split('-')[0];
+    if (SUPPORTED_LANGS.has(base)) return base;
+    // Map zh-CN / zh-SG to zh-Hans if/when present.
+    if (/^zh(-CN|-SG|-Hans)?$/i.test(c) && SUPPORTED_LANGS.has('zh-Hans')) return 'zh-Hans';
+  }
+  return 'en';
+}
+
+function buildLangDropdown() {
+  const sel = $('#langSelect');
+  sel.innerHTML = '';
+  for (const lang of LANGUAGES) {
+    if (!SUPPORTED_LANGS.has(lang.code)) continue;
+    const o = document.createElement('option');
+    o.value = lang.code;
+    o.textContent = `${lang.flag}  ${lang.label}`;
+    sel.appendChild(o);
+  }
+  sel.value = state.lang;
+}
+
+/* Apply current language to all text nodes that bear a data-i18n key.
+   We keep keys in the markup rather than on JS rebuild — saves us from
+   re-rendering the static chrome on every change. */
+// BCP-47 codes whose scripts run right-to-left. Setting dir on <html> lets the
+// browser mirror layout for these without per-component overrides.
+const RTL_LANGS = new Set(['ar', 'he', 'fa', 'ur']);
+
+function applyI18n() {
+  document.documentElement.lang = state.lang;
+  document.documentElement.dir = RTL_LANGS.has(state.lang) ? 'rtl' : 'ltr';
+  $$('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  // appTitle and matchText carry dynamic content (game name + copies count),
+  // so they're updated explicitly rather than via data-i18n.
+  updateBranding();
+  updateMatchText();
+  // Game-name placeholder + aria-label are language-aware too.
+  const gn = $('#gameName');
+  if (gn) {
+    gn.placeholder = t('gameNamePlaceholder');
+    gn.setAttribute('aria-label', t('gameNamePlaceholder'));
+  }
+}
+
+/* updateBranding owns the visible h1 and the document title (browser tab).
+   If state.gameName is set, it's prefixed onto the base "Memory Peek" label;
+   otherwise the base label is used as-is. Called whenever gameName changes,
+   on every language switch, on initial boot, and after standalone hydrate. */
+function updateBranding() {
+  const base = t('appTitle');
+  const name = (state.gameName || '').trim();
+  const text = name ? (name + ' - ' + base) : base;
+  document.title = text;
+  const h1 = $('#appTitle');
+  if (h1) h1.textContent = text;
+}
+
+/* ---------------------------------------------------------------------------
+   Tiny DOM helpers
+   --------------------------------------------------------------------------- */
+function $(sel, root) { return (root || document).querySelector(sel); }
+function $$(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
+function el(tag, attrs, children) {
+  const n = document.createElement(tag);
+  if (attrs) for (const k in attrs) {
+    if (k === 'class') n.className = attrs[k];
+    else if (k === 'text') n.textContent = attrs[k];
+    else if (k === 'html') n.innerHTML = attrs[k];
+    else if (k.startsWith('on') && typeof attrs[k] === 'function') n.addEventListener(k.slice(2), attrs[k]);
+    else if (attrs[k] === true) n.setAttribute(k, '');
+    else if (attrs[k] !== false && attrs[k] != null) n.setAttribute(k, attrs[k]);
+  }
+  if (children) for (const c of children) n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  return n;
+}
+
+/* ---------------------------------------------------------------------------
+   Editor: image upload
+   --------------------------------------------------------------------------- */
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+async function addImagesFromFiles(fileList) {
+  const files = Array.from(fileList || []).filter(f => f.type.startsWith('image/'));
+  for (const f of files) {
+    try {
+      const dataUri = await readFileAsDataURL(f);
+      state.images.push({
+        id: 'img_' + Math.floor(performance.now() * 1000) + '_' + state.images.length,
+        name: f.name,
+        dataUri,
+      });
+    } catch (e) { /* skip unreadable file */ }
+  }
+  renderThumbs();
+  renderBoardWarn();
+  saveStateSoon();
+}
+
+function renderThumbs() {
+  const grid = $('#thumbGrid');
+  grid.innerHTML = '';
+  // Bucket data URIs first so any thumb whose URI appears more than once gets
+  // a "dup" highlight. Done in one pass so the per-thumb lookup below is O(1).
+  const counts = new Map();
+  for (const img of state.images) counts.set(img.dataUri, (counts.get(img.dataUri) || 0) + 1);
+  state.images.forEach((img, idx) => {
+    const isDup = counts.get(img.dataUri) > 1;
+    const t = el('div', {
+      class: 'thumb' + (isDup ? ' dup' : ''),
+      role: 'listitem',
+      title: isDup ? 'Duplicate image' : '',
+    }, [
+      el('img', { src: img.dataUri, alt: img.name || ('Card image ' + (idx + 1)) }),
+      el('button', {
+        class: 'x',
+        type: 'button',
+        'aria-label': 'Remove image',
+        onclick: () => {
+          state.images.splice(idx, 1);
+          renderThumbs();
+          renderBoardWarn();
+          saveStateSoon();
+        },
+      }, ['×']),
+    ]);
+    grid.appendChild(t);
+  });
+  renderImageWarn();
+}
+
+/* Surface duplicate uploads to the user without blocking them — identical card
+   faces are allowed (the user might want a "find both copies of X" puzzle) but
+   are usually a mistake. Compare by the raw data URI string: two uploads of the
+   same file produce identical base64 payloads. */
+function countDuplicateImages() {
+  const seen = new Map();
+  for (const img of state.images) seen.set(img.dataUri, (seen.get(img.dataUri) || 0) + 1);
+  let extras = 0;
+  for (const n of seen.values()) if (n > 1) extras += n - 1;
+  return extras;
+}
+
+function renderImageWarn() {
+  const w = $('#imageWarn');
+  const n = countDuplicateImages();
+  if (n > 0) {
+    w.hidden = false;
+    w.textContent = t('warnDupImages', { n, s: n === 1 ? '' : 's' });
+  } else {
+    w.hidden = true;
+    w.textContent = '';
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Editor: backside picker
+   --------------------------------------------------------------------------- */
+function renderBacksides() {
+  const wrap = $('#backsides');
+  wrap.innerHTML = '';
+  BUILTIN_BACKSIDES.forEach(b => {
+    const sel = state.backsideId === b.id;
+    const node = el('div', {
+      class: 'backside-opt' + (sel ? ' selected' : ''),
+      role: 'radio',
+      tabindex: '0',
+      'aria-checked': sel ? 'true' : 'false',
+      'aria-label': b.name,
+      onclick: () => { state.backsideId = b.id; renderBacksides(); saveStateSoon(); },
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); state.backsideId = b.id; renderBacksides(); saveStateSoon(); } },
+    }, [
+      el('img', { src: b.dataUri, alt: '' }),
+      el('div', { class: 'label', text: b.name }),
+    ]);
+    wrap.appendChild(node);
+  });
+  if (state.customBackside) {
+    const sel = state.backsideId === 'custom';
+    const node = el('div', {
+      class: 'backside-opt' + (sel ? ' selected' : ''),
+      role: 'radio',
+      tabindex: '0',
+      'aria-checked': sel ? 'true' : 'false',
+      'aria-label': 'Custom backside',
+      onclick: () => { state.backsideId = 'custom'; renderBacksides(); saveStateSoon(); },
+    }, [
+      el('img', { src: state.customBackside, alt: '' }),
+      el('div', { class: 'label', text: 'Custom' }),
+    ]);
+    wrap.appendChild(node);
+  }
+  $('#clearCustomBack').hidden = !state.customBackside;
+}
+
+/* ---------------------------------------------------------------------------
+   Editor: board warnings
+   --------------------------------------------------------------------------- */
+function neededUniqueImages() {
+  const total = state.cols * state.rows;
+  if (state.copies < 2 || total % state.copies !== 0) return null;
+  return total / state.copies;
+}
+
+function renderBoardWarn() {
+  const w = $('#boardWarn');
+  const total = state.cols * state.rows;
+  const have = state.images.length;
+  const needed = neededUniqueImages();
+
+  // Computed-totals hints — these sit next to the cols/rows and copies fields.
+  // The "cards total" hint reflects the deck the user *has* (uploaded images
+  // × copies-per-card), not the board fit; that's the number they're building
+  // toward as they add images, independent of the chosen grid.
+  $('#gridTotalHint').textContent = `(${state.cols} × ${state.rows} = ${total} cards)`;
+  $('#uniqueTotalHint').textContent = have > 0 ? `(${have * state.copies} cards total)` : '';
+
+  let msg = '';
+  if (have === 0) {
+    msg = t('warnNoImages');
+  } else if (needed == null) {
+    msg = t('warnGridIndivisible', { n: total, copies: state.copies });
+  } else if (have < needed) {
+    msg = t('warnNeedMoreImages', { needed, have });
+  } else if (have > needed) {
+    msg = t('warnExtraImages', { needed, have });
+  }
+
+  if (msg) { w.hidden = false; w.textContent = msg; }
+  else { w.hidden = true; w.textContent = ''; }
+
+  // Allow download/test only when needed exactly matches (or extras, which we trim).
+  const playable = have > 0 && needed != null && have >= needed;
+  $('#btnTestPlay').disabled = !playable;
+  $('#btnDownload').disabled = !playable;
+}
+
+/* ---------------------------------------------------------------------------
+   Game: build a deck from a config snapshot. Config shape mirrors the part of
+   `state` that matters at play time:
+     { images:[{id,dataUri}], cols, rows, copies, fit, backsideUri, hud:{...} }
+   --------------------------------------------------------------------------- */
+function configFromState() {
+  const needed = neededUniqueImages();
+  const pickedImages = state.images.slice(0, needed).map(i => ({ id: i.id, dataUri: i.dataUri }));
+  const backsideUri = state.backsideId === 'custom' && state.customBackside
+    ? state.customBackside
+    : (BUILTIN_BACKSIDES.find(b => b.id === state.backsideId) || BUILTIN_BACKSIDES[0]).dataUri;
+  return {
+    images: pickedImages,
+    cols: state.cols,
+    rows: state.rows,
+    copies: state.copies,
+    fit: state.fit,
+    backsideUri,
+    hud: { ...state.hud },
+    gameName: state.gameName || '',
+  };
+}
+
+/* Fisher–Yates shuffle; mutates in place and returns the array. */
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    // No `Math.random` substitute available — we accept the standard PRNG; ties are fine here.
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+  }
+  return arr;
+}
+
+function buildDeck(cfg) {
+  const deck = [];
+  cfg.images.forEach((img, gIdx) => {
+    for (let k = 0; k < cfg.copies; k++) {
+      deck.push({ groupIdx: gIdx, dataUri: img.dataUri, key: img.id });
+    }
+  });
+  return shuffle(deck);
+}
+
+/* ---------------------------------------------------------------------------
+   Game rendering & interactions
+   --------------------------------------------------------------------------- */
+function startGame(cfg, opts) {
+  // Cancel any in-flight flip-back.
+  if (resolveTimer) { clearTimeout(resolveTimer); resolveTimer = null; }
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+  startedAt = 0;
+
+  game = {
+    cfg,
+    deck: buildDeck(cfg),
+    flipped: [],           // currently revealed (unresolved) DOM cards
+    resolving: false,
+    moves: 0,
+    matchedGroups: 0,
+    totalGroups: cfg.images.length,
+    endedAt: 0,            // ms timestamp when the last match completed; freezes the timer
+  };
+
+  $('#editorView').style.display = 'none';
+  $('#gameView').classList.add('active');
+  // Game-mode chrome lives in the page header — Edit Cards is always available
+  // in the downloaded standalone too, so players can tweak the game they
+  // received.
+  setGameButtonsVisible(true);
+
+  // Configure stats visibility based on stored toggles.
+  $('#statMoves').hidden = !cfg.hud.moves;
+  $('#statTimer').hidden = !cfg.hud.timer;
+  $('#statMatches').hidden = !cfg.hud.matches;
+
+  updateMatchText();
+  renderBoard();
+  updateHud();
+}
+
+function setGameButtonsVisible(visible) {
+  $('#btnEditCards').hidden = !visible;
+  $('#btnGallery').hidden = !visible;
+  $('#btnNewGame').hidden = !visible;
+}
+
+/* Swap the game view off and the editor view on. Invoked by the Edit Cards
+   button (which triggers a history.back when our pushed entry is on top) and
+   directly by the popstate listener when the user clicks the browser Back. */
+function returnToEditorView() {
+  if (resolveTimer) { clearTimeout(resolveTimer); resolveTimer = null; }
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+  game = null;
+  testPlayHistoryPushed = false;
+  $('#gameView').classList.remove('active');
+  $('#editorView').style.display = '';
+  setGameButtonsVisible(false);
+  updateMatchText();
+}
+
+window.addEventListener('popstate', () => {
+  // Only react to the Test-Play entry we ourselves pushed; popstates from
+  // initial page load or unrelated navigations are ignored.
+  if (testPlayHistoryPushed) returnToEditorView();
+});
+
+/* Sync the "Match N of each card." header label. In game mode we read the
+   currently-active deck's copies; in editor mode we mirror the live editor
+   value so changing the spinner updates the header in real time. */
+function updateMatchText() {
+  const n = game ? game.cfg.copies : state.copies;
+  $('#matchText').textContent = t('matchEachCard', { n });
+}
+
+function renderBoard() {
+  const board = $('#board');
+  board.className = ''; // reset prior fit class
+  board.classList.add('fit-' + game.cfg.fit);
+  board.style.gridTemplateColumns = `repeat(${game.cfg.cols}, 1fr)`;
+  // Set --cols/--rows on the wrapper so its CSS width can match the grid's
+  // aspect ratio against the viewport-height-derived budget.
+  const wrap = $('#boardWrap');
+  wrap.style.setProperty('--cols', String(game.cfg.cols));
+  wrap.style.setProperty('--rows', String(game.cfg.rows));
+  board.innerHTML = '';
+
+  game.deck.forEach((card, i) => {
+    const btn = el('button', {
+      class: 'card',
+      type: 'button',
+      role: 'gridcell',
+      'aria-label': t('cardAltBack'),
+      'data-i': i,
+    }, [
+      el('span', { class: 'card-inner' }, [
+        el('span', { class: 'card-side back' }, [
+          el('img', { src: game.cfg.backsideUri, alt: '' }),
+        ]),
+        el('span', { class: 'card-side front' }, [
+          el('img', { src: card.dataUri, alt: t('cardAltFace') }),
+        ]),
+      ]),
+    ]);
+    btn.addEventListener('click', () => onCardClick(btn));
+    board.appendChild(btn);
+  });
+}
+
+function onCardClick(btn) {
+  if (!game || game.resolving) return;
+  if (btn.classList.contains('flipped') || btn.classList.contains('matched')) return;
+
+  btn.classList.add('flipped');
+  btn.setAttribute('aria-label', t('cardAltFace'));
+  game.flipped.push(btn);
+
+  // Start the elapsed timer on first flip (only matters if HUD shows it).
+  if (!startedAt) {
+    startedAt = Date.now();
+    if (game.cfg.hud.timer && !elapsedTimer) {
+      elapsedTimer = setInterval(updateHud, 1000);
+    }
+  }
+
+  if (game.flipped.length === game.cfg.copies) {
+    // Decide: do all flipped cards share the same group?
+    const i0 = +game.flipped[0].dataset.i;
+    const g0 = game.deck[i0].groupIdx;
+    const allMatch = game.flipped.every(b => game.deck[+b.dataset.i].groupIdx === g0);
+
+    game.moves++;
+    game.resolving = true;
+
+    if (allMatch) {
+      // Mark as matched and keep face up.
+      game.flipped.forEach(b => { b.classList.add('matched'); b.disabled = true; });
+      game.flipped = [];
+      game.matchedGroups++;
+      game.resolving = false;
+      // Last match? Freeze the elapsed timer at this instant so the HUD
+      // shows the final solve time instead of continuing to tick.
+      if (game.matchedGroups === game.totalGroups) {
+        game.endedAt = Date.now();
+        if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+      }
+    } else {
+      // Flip them back after a short delay.
+      const toRestore = game.flipped;
+      game.flipped = [];
+      resolveTimer = setTimeout(() => {
+        toRestore.forEach(b => {
+          b.classList.remove('flipped');
+          b.setAttribute('aria-label', t('cardAltBack'));
+        });
+        game.resolving = false;
+        resolveTimer = null;
+      }, MISMATCH_FLIPBACK_MS);
+    }
+    updateHud();
+  }
+}
+
+function fmtTime(secs) {
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+function updateHud() {
+  if (!game) return;
+  $('#movesVal').textContent = String(game.moves);
+  // Once the board is cleared, game.endedAt holds the final timestamp so the
+  // displayed time stops advancing even though Date.now() keeps ticking.
+  const endTs = game.endedAt || Date.now();
+  const secs = startedAt ? Math.floor((endTs - startedAt) / 1000) : 0;
+  $('#timerVal').textContent = fmtTime(secs);
+  $('#matchesVal').textContent = `${game.matchedGroups} / ${game.totalGroups}`;
+}
+
+/* Reset = rebuild the deck preserving current shuffle order? Per the spec,
+   Reset and Shuffle both restart. We make Reset keep the same deck order
+   (so players who want a do-over of the same layout get it) and Shuffle
+   re-shuffle. Both clear stats and revealed state. */
+function resetGame() {
+  if (resolveTimer) { clearTimeout(resolveTimer); resolveTimer = null; }
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+  startedAt = 0;
+  game.flipped = [];
+  game.resolving = false;
+  game.moves = 0;
+  game.matchedGroups = 0;
+  game.endedAt = 0;
+  renderBoard();
+  updateHud();
+}
+function shuffleGame() {
+  game.deck = shuffle(game.deck.slice());
+  resetGame();
+}
+
+/* ---------------------------------------------------------------------------
+   Gallery overlay — browse the deck's unique card faces. Driven by the HUD
+   button, keyboard arrows, Escape, and clicks on the backdrop. We re-grab
+   the image list off `game.cfg` every open so a New game (which can reshuffle
+   the order) is still reflected. State is the index of the currently-shown
+   image.
+   --------------------------------------------------------------------------- */
+let galleryIndex = 0;
+
+function openGallery() {
+  if (!game || !game.cfg.images.length) return;
+  galleryIndex = 0;
+  $('#gallery').hidden = false;
+  updateGalleryImage();
+  $('#galleryClose').focus();
+  document.addEventListener('keydown', galleryKeyHandler);
+}
+function closeGallery() {
+  $('#gallery').hidden = true;
+  document.removeEventListener('keydown', galleryKeyHandler);
+}
+function galleryStep(direction) {
+  const n = game.cfg.images.length;
+  if (!n) return;
+  // Modular step so left at index 0 wraps to the end, and vice versa.
+  galleryIndex = (galleryIndex + direction + n) % n;
+  updateGalleryImage();
+}
+function updateGalleryImage() {
+  const img = game.cfg.images[galleryIndex];
+  const total = game.cfg.images.length;
+  $('#galleryImg').src = img.dataUri;
+  $('#galleryImg').alt = `Image ${galleryIndex + 1} of ${total}`;
+  $('#galleryCount').textContent = `${galleryIndex + 1} / ${total}`;
+}
+function galleryKeyHandler(e) {
+  if (e.key === 'Escape') { e.preventDefault(); closeGallery(); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); galleryStep(-1); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); galleryStep(1); }
+}
+function bindGallery() {
+  $('#btnGallery').addEventListener('click', openGallery);
+  $('#galleryClose').addEventListener('click', closeGallery);
+  $('#galleryPrev').addEventListener('click', () => galleryStep(-1));
+  $('#galleryNext').addEventListener('click', () => galleryStep(1));
+  // Click the dark backdrop (but not the image / nav buttons) to dismiss.
+  $('#gallery').addEventListener('click', (e) => {
+    if (e.target.id === 'gallery') closeGallery();
+  });
+}
+
+/* ---------------------------------------------------------------------------
+   Standalone game download
+   --------------------------------------------------------------------------- */
+function downloadStandaloneGame() {
+  const cfg = configFromState();
+  // Escape `</` inside the JSON to keep it safe as a <script> body.
+  const json = JSON.stringify(cfg).replace(/</g, '\\u003c');
+  // We tag the injected script with a known id so we can strip any prior
+  // copy out of the pristine HTML before re-injecting — otherwise a player
+  // who edits a downloaded game and re-downloads would accumulate duplicate
+  // APP_CONFIG blocks (each carrying the embedded images, fast bloat).
+  // The opening tag is concatenated and the closing tag uses `<\/script>` so
+  // the HTML parser doesn't close *our* surrounding script when tokenizing.
+  const OPEN  = '<scr' + 'ipt id="__app_config__">';
+  const CLOSE = '<\/scr' + 'ipt>';
+  const tag   = OPEN + 'window.APP_CONFIG = ' + json + ';' + CLOSE;
+
+  // outerHTML serialization may reorder/re-quote attributes — match by id
+  // attribute rather than by literal opening string. The regex is built from
+  // a string so the source code can avoid containing a literal close-script tag.
+  const dedupRe = new RegExp('<script\\b[^>]*\\bid=["\']__app_config__["\'][^>]*>[\\s\\S]*?<\\/script>\\s*', 'gi');
+  const pristine = PRISTINE_HTML.replace(dedupRe, '');
+  const out = pristine.replace('</head>', tag + '\n</head>');
+
+  const blob = new Blob([out], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = downloadFilenameFor(state.gameName);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoke after a tick to let the click finish in Safari/iOS.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* Build a filesystem-safe filename from the optional game name. We lowercase,
+   strip diacritics, collapse non-alphanumerics into hyphens, and trim edges
+   — "Pokémon Gen 1!" becomes "memorypeek-pokemon-gen-1.html". An empty or
+   all-stripped name falls back to the bare "memorypeek.html". */
+function downloadFilenameFor(name) {
+  // NFKD decomposes accented chars (e.g. "é" → "e" + U+0301); the regex below
+  // drops the combining-mark range so we're left with plain ASCII letters,
+  // then non-alphanumerics collapse to single hyphens.
+  const slug = (name || '')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug ? ('memorypeek-' + slug + '.html') : 'memorypeek.html';
+}
+
+/* ---------------------------------------------------------------------------
+   Wiring & bootstrap
+   --------------------------------------------------------------------------- */
+function bindEditor() {
+  // --- File input + drag/drop dropzone -----------------------------------
+  const dz = $('#dropzone');
+  const fi = $('#fileInput');
+  fi.addEventListener('change', () => { addImagesFromFiles(fi.files); fi.value = ''; });
+  ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => {
+    e.preventDefault(); dz.classList.add('drag');
+  }));
+  ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => {
+    e.preventDefault(); dz.classList.remove('drag');
+  }));
+  dz.addEventListener('drop', e => { if (e.dataTransfer && e.dataTransfer.files) addImagesFromFiles(e.dataTransfer.files); });
+
+  // --- Board fields ------------------------------------------------------
+  const bind = (id, key, asInt) => {
+    const ctrl = $('#' + id);
+    ctrl.value = state[key];
+    ctrl.addEventListener('input', () => {
+      const v = asInt ? Math.max(1, parseInt(ctrl.value, 10) || 1) : ctrl.value;
+      state[key] = v;
+      if (asInt && id === 'copies') state.copies = Math.max(2, v);
+      renderBoardWarn();
+      if (id === 'copies') updateMatchText();
+      saveStateSoon();
+    });
+  };
+  bind('cols', 'cols', true);
+  bind('rows', 'rows', true);
+  bind('copies', 'copies', true);
+  $('#fit').value = state.fit;
+  $('#fit').addEventListener('change', () => { state.fit = $('#fit').value; saveStateSoon(); });
+
+  // --- Custom backside upload -------------------------------------------
+  $('#customBackInput').addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    state.customBackside = await readFileAsDataURL(f);
+    state.backsideId = 'custom';
+    renderBacksides();
+    saveStateSoon();
+    e.target.value = '';
+  });
+  $('#clearCustomBack').addEventListener('click', () => {
+    state.customBackside = null;
+    if (state.backsideId === 'custom') state.backsideId = 'stripes';
+    renderBacksides();
+    saveStateSoon();
+  });
+
+  // --- HUD toggles -------------------------------------------------------
+  const hb = (id, key) => {
+    const c = $('#' + id);
+    c.checked = !!state.hud[key];
+    c.addEventListener('change', () => { state.hud[key] = c.checked; saveStateSoon(); });
+  };
+  hb('hudMoves', 'moves');
+  hb('hudTimer', 'timer');
+  hb('hudMatches', 'matches');
+
+  // --- Game name ---------------------------------------------------------
+  const gn = $('#gameName');
+  gn.value = state.gameName || '';
+  gn.addEventListener('input', () => {
+    state.gameName = gn.value;
+    updateBranding();
+    saveStateSoon();
+  });
+
+  // --- Action buttons ----------------------------------------------------
+  $('#btnTestPlay').addEventListener('click', () => {
+    const cfg = configFromState();
+    startGame(cfg, { standalone: false });
+    // Push a history step so the browser Back button returns to the editor.
+    // We tag the entry so popstate can tell whether we own this navigation.
+    history.pushState({ mgmTestPlay: true }, '');
+    testPlayHistoryPushed = true;
+  });
+  $('#btnEditCards').addEventListener('click', () => {
+    // If we got into game mode via Test Play, walking history back triggers
+    // popstate which calls returnToEditorView() — keeping browser-back and
+    // the explicit button on the same code path.
+    if (testPlayHistoryPushed) history.back();
+    else returnToEditorView();
+  });
+  $('#btnDownload').addEventListener('click', downloadStandaloneGame);
+  $('#btnClearCards').addEventListener('click', () => {
+    // Native confirm() — small, accessible, and the OK/Cancel buttons are
+    // already provided by the browser in the user's system language. We pass
+    // our translated prompt text so the question itself matches the UI lang.
+    if (!confirm(t('confirmClear'))) return;
+    state.images = [];
+    renderThumbs();
+    renderBoardWarn();
+  });
+
+  // --- New game / Gallery (game view) ------------------------------------
+  // "New game" reshuffles the deck and clears progress; there is no separate
+  // Reset (per design). The gallery overlay is wired below in bindGallery().
+  $('#btnNewGame').addEventListener('click', () => { if (game) shuffleGame(); });
+  bindGallery();
+
+  // --- Language select ---------------------------------------------------
+  $('#langSelect').addEventListener('change', (e) => {
+    state.lang = e.target.value;
+    localStorage.setItem(LS_LANG, state.lang);
+    applyI18n();
+  });
+}
+
+/* Stamp i18n keys onto the static editor chrome so applyI18n() can repaint
+   labels when the user changes language. Done in JS so the markup above stays
+   readable; mirror keys are listed in I18N. */
+function tagI18nKeys() {
+  const map = [
+    // appTitle is managed by updateBranding() so the optional game name can
+    // prefix it; don't tag it with data-i18n or applyI18n would overwrite.
+    // The language label was replaced with a decorative globe emoji, so no
+    // translation mapping is needed for it anymore.
+    ['sec-images', 'secImages'],
+    ['sec-board', 'secBoard'],
+    ['sec-back', 'secBack'],
+    ['sec-hud', 'secHud'],
+    ['sec-actions', 'secActions'],
+    ['dropzoneText', 'dropzone'],
+    ['actionsHint', 'actionsHint'],
+  ];
+  for (const [id, key] of map) {
+    const node = document.getElementById(id);
+    if (node) node.setAttribute('data-i18n', key);
+  }
+  // Buttons by selector → key:
+  const byText = [
+    ['#btnTestPlay', 'testPlay'],
+    ['#btnDownload', 'download'],
+    ['#btnClearCards', 'clearCards'],
+    ['#btnNewGame', 'newGame'],
+    ['#btnGallery', 'gallery'],
+    ['#btnEditCards', 'editCards'],
+  ];
+  for (const [sel, key] of byText) {
+    const n = $(sel);
+    if (n) n.setAttribute('data-i18n', key);
+  }
+}
+
+function bootEditor() {
+  // Editor state is intentionally tab-scoped — no IDB/localStorage hydrate.
+  // The Actions section warns the user to download their game .html to keep
+  // their uploaded images. Seed with eight default geometric cards so the
+  // editor is immediately playable; Clear Cards wipes them.
+  state.images = DEFAULT_CARD_IMAGES.slice();
+  state.lang = pickInitialLang();
+  buildLangDropdown();
+  tagI18nKeys();
+  applyI18n();
+  renderThumbs();
+  renderBacksides();
+  renderBoardWarn();
+  bindEditor();
+}
+
+/* Recover an editor-shaped `state` object from a standalone game's APP_CONFIG.
+   Used in the downloaded HTML so a player can hit Edit Cards and modify the
+   exact game they were given, then re-download. The reverse mapping for the
+   backside is best-effort: we look for a built-in whose data URI matches; if
+   none does, the URI must be a custom upload, which we store as such. */
+function hydrateStateFromConfig(cfg) {
+  state.images = cfg.images.map((img, i) => ({
+    id: img.id || ('img_' + i),
+    name: 'Card ' + (i + 1),
+    dataUri: img.dataUri,
+  }));
+  state.cols = cfg.cols;
+  state.rows = cfg.rows;
+  state.copies = cfg.copies;
+  state.fit = cfg.fit;
+  state.hud = Object.assign({ moves: false, timer: false, matches: false }, cfg.hud || {});
+  state.gameName = cfg.gameName || '';
+  const builtin = BUILTIN_BACKSIDES.find(b => b.dataUri === cfg.backsideUri);
+  if (builtin) {
+    state.backsideId = builtin.id;
+    state.customBackside = null;
+  } else {
+    state.backsideId = 'custom';
+    state.customBackside = cfg.backsideUri;
+  }
+}
+
+function bootStandaloneGame(cfg) {
+  // Keep the editor in the DOM; we just open straight into the game. Edit
+  // Cards swaps to the editor, prepopulated with the downloaded game's data.
+  hydrateStateFromConfig(cfg);
+  state.lang = pickInitialLang();
+  buildLangDropdown();
+  tagI18nKeys();
+  applyI18n();
+  renderThumbs();
+  renderBacksides();
+  renderBoardWarn();
+  bindEditor();
+  startGame(configFromState(), { standalone: true });
+}
+
+/* Boot. The presence of window.APP_CONFIG decides which mode runs. */
+if (window.APP_CONFIG) {
+  bootStandaloneGame(window.APP_CONFIG);
+} else {
+  bootEditor();
+}
+</script>
+</body>
+</html>
